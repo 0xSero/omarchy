@@ -11,7 +11,6 @@ if lspci | grep -qi 'nvidia'; then
     exit 0
   fi
 
-  omarchy-pkg-add-kernel-headers
   omarchy-pkg-add "${PACKAGES[@]}"
 
   # Per-session Hyprland NVIDIA env vars are handled by default/hypr/nvidia.lua.
