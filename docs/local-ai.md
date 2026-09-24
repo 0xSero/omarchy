@@ -30,6 +30,8 @@ Omarchy keeps users out of the docker group, so starting containers needs root. 
 - **Containers, not packages.** Engines need exact CUDA, ROCm or oneAPI stacks; an image pinned by digest is the smallest thing that reproduces the accepted run.
 - **A gateway in front.** Engines differ in API and none checks a key; the gateway gives every engine the same keyed endpoint and the same usage accounting.
 - **The view is data.** `Model.js` is plain functions over the snapshot, so every page (home, a running model, a free card, Coming soon) is a function of state and can be rendered without the backend.
+- **Color is picked by contrast, not by hand.** `Model.tones` derives four tones from the theme with APCA: ink (Lc 90) for what matters now (a model's name, the primary action, a choice made), a value tone (Lc 80) for what a label names, one label tone (Lc 60) for every label and heading, and a rule tone (Lc 15) for lines that are not text. Each is measured on the card surface, the lighter of the panel's two backgrounds, so any theme stays readable; a theme whose foreground cannot reach Lc 90 is pushed toward white or black.
+- **One grid.** Text starts and ends on a single gutter; surfaces sit 8 in from the edge so the text inside them lands on the same gutter. Two sizes: the model's name, and everything else. Rows in a group touch, a heading sits on its rows, groups are a clear gap apart, so what belongs together reads together before any word is read.
 
 ## Limits
 
