@@ -46,17 +46,19 @@ assertDeepEqual(home.rows.slice(2, 4).map(r => [r.label, r.run.action]), [['Arc 
 assertDeepEqual([home.rows[4].label, home.rows[4].value, home.rows[4].action], ['all GPUs', '5', 'gpus'], 'local-ai the rest of the GPUs are one link away')
 assertDeepEqual([home.stat, home.statLabel], ['4.2M', 'all time'], 'local-ai home shows all-time tokens as value and label')
 
-// Opening a free GPU: run it, run one model across it and another free card of its kind, or choose agent and folder
+// Opening a free GPU: run it, run one model across it and another free card of its kind, or its Config
 const opened = model.build(snap, { view: 'home', open: 'gpu:a1' }).rows
 assertDeepEqual(opened[3].items.map(a => a.action), ['run|q|a1', 'run|q2|a1,a2', 'kind|arc|a1'], 'local-ai a free GPU offers a group across free cards of its kind')
 
-// All GPUs: every card with what it is doing
+// All GPUs: every card as home's rows, free ones first; a busy one still opens to its Config
 const all = model.build(snap, { view: 'gpus' }).rows
-assertDeepEqual(all.slice(1).map(r => r.status), ['running Qwen3.8-27B', 'free', 'free', 'in use by another program', 'no validated model yet'], 'local-ai the GPUs page lists every card and its state')
+assertDeepEqual(all.slice(1).map(r => r.run ? r.run.action : r.note), ['run|q|a1', 'run|q|a2', 'running Qwen3.8-27B', 'in use by another program', 'no validated model yet'], 'local-ai the GPUs page lists every card and its state')
+const held = model.build(snap, { view: 'gpus', open: 'gpu:n0' }).rows
+assertDeepEqual([held[5].type, held[5].note, held[5].items.map(a => a.label + ' ' + a.action)], ['links', '24 GB', ['Config kind|3090|n0']], 'local-ai a card another program holds opens to its Config')
 
 // A crashed model is an available GPU's row: run it again in one click, or open it for the reason, the log and dismiss
 const crashed = Object.assign({}, snap, { deployments: [Object.assign({}, snap.deployments[0], { id: 'x', state: 'error', error: 'the engine stopped' })] })
 const rows = model.build(crashed, { view: 'home', open: 'gpu:a0' }).rows
 assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'slot', 'links', 'field'], 'local-ai a crashed model is a row after the free ones')
-assertDeepEqual([rows[3].crashed, rows[3].run.action, rows[4].note, rows[4].items.map(a => a.action)], [true, 'again|x|a0', 'the engine stopped', ['again|x|a0', 'log', 'stop|x']], 'local-ai a crashed GPU runs again, shows why, or is dismissed (stopped)')
+assertDeepEqual([rows[3].crashed, rows[3].run.action, rows[4].note, rows[4].items.map(a => a.action)], [true, 'again|x|a0', '32 GB\nthe engine stopped', ['again|x|a0', 'log', 'more|x', 'stop|x']], 'local-ai a crashed GPU runs again, shows why, opens its Config, or is dismissed (stopped)')
 JS
