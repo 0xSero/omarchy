@@ -45,7 +45,9 @@ assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'slot', 'slot', 'slot
 assertDeepEqual(home.rows.slice(2, 4).map(r => [r.label, r.run.action]), [['Arc Pro B70', 'run|q|a1'], ['Arc Pro B70', 'run|q|a2']], 'local-ai only free GPUs are listed, each running its model in one click')
 assertDeepEqual([home.rows[4].label, home.rows[4].run.action], ['2 × Arc Pro B70', 'run|q2|a1,a2'], 'local-ai two free cards of a kind are also offered as a group, its own row')
 assertDeepEqual([home.rows[5].label, home.rows[5].value, home.rows[5].action], ['all GPUs', '5', 'gpus'], 'local-ai the rest of the GPUs are one link away')
-assertDeepEqual([home.stat, home.statLabel], ['4.2M', 'all time'], 'local-ai home shows all-time tokens as value and label')
+const lived = model.build(Object.assign({}, snap, { life: { requests: 1204, since: 'Sep 23', last: Date.now() / 1000, line: [1, 5, 9] } }), { view: 'home' }).rows
+assertDeepEqual([lived[0].type, lived[0].tokens, lived[0].requests, lived[0].now, lived[1].type], ['life', '4.2M tokens', '1.2K requests', 'now', 'run'], 'local-ai home leads with your lifetime line, tokens and requests, above the running models')
+assertDeepEqual(home.rows[0].type, 'run', 'local-ai a first run, with no answers yet, has no lifetime line')
 
 // Opening a free GPU: run it, or its Config; groups are their own rows, whose Config is the group's page
 const opened = model.build(snap, { view: 'home', open: 'gpu:a1' }).rows
@@ -60,6 +62,20 @@ const all = model.build(snap, { view: 'gpus' }).rows
 assertDeepEqual(all.slice(1).map(r => r.run ? r.run.action : r.note), ['run|q|a1', 'run|q|a2', 'run|q2|a1,a2', 'running Qwen3.8-27B', 'in use by another program', 'no validated model yet'], 'local-ai the GPUs page lists every card and its state')
 const held = model.build(snap, { view: 'gpus', open: 'gpu:n0' }).rows
 assertDeepEqual([held[6].type, held[6].chips.map(c => c.text), held[6].items.map(a => a.label + ' ' + a.action)], ['links', ['24 GB'], ['Config kind|3090|n0']], 'local-ai a card another program holds opens to its Config')
+
+// A card kind's page shows the one card it was opened from: Run when it is free, why not when another program holds it
+const kfree = model.build(snap, { view: 'kind', id: 'arc', key: 'a2' })
+assertDeepEqual([kfree.rows.filter(r => r.type === 'gpu').length, kfree.rows[kfree.rows.length - 1].items[0].action], [1, 'run|q|a2'], "local-ai a card's page runs its model on that card")
+const kheld = model.build(snap, { view: 'kind', id: '3090', key: 'n0' })
+assertDeepEqual([kheld.rows.filter(r => r.type === 'gpu').map(r => r.status), kheld.rows[kheld.rows.length - 1].items[0].action], [['in use by another program'], ''], "local-ai a held card's page says why it cannot run")
+
+// A card's Config lists every model validated for it; choosing one changes the page and what Run starts
+const other = { id: 'g', name: 'Gemma-4-12B-it', family: '', format: 'EXL3 · 4 bpw', ctx: 131072, caps: {}, weights: [] }
+const picks = Object.assign({}, snap, { kinds: snap.kinds.map(k => k.hw === 'arc' ? Object.assign({}, k, { models: [recipe, other] }) : k) })
+const cfg = model.build(picks, { view: 'kind', id: 'arc', key: 'a1' })
+assertDeepEqual(cfg.rows.filter(r => r.type === 'opt').map(r => [r.label, r.on, r.action]), [['Qwen3.8-27B', true, 'model|q'], ['Gemma-4-12B-it', false, 'model|g']], "local-ai a card's Config lists its models, the recommended one chosen")
+const chose = model.build(picks, { view: 'kind', id: 'arc', key: 'a1', model: 'g' })
+assertDeepEqual([chose.hero.name, chose.rows.filter(r => r.type === 'opt' && r.on)[0].label, chose.rows[chose.rows.length - 1].items[0].action], ['Gemma-4-12B-it', 'Gemma-4-12B-it', 'run|g|a1'], 'local-ai choosing a model changes the page and what Run starts')
 
 // A crashed model is an available GPU's row: run it again in one click, or open it for the reason, the log and dismiss
 const crashed = Object.assign({}, snap, { deployments: [Object.assign({}, snap.deployments[0], { id: 'x', state: 'error', error: 'the engine stopped' })] })
