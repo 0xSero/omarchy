@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Omarchy",
   "license": "MIT",
-  "description": "Run the model validated for your GPU and open any coding agent on it, with GPU temperature, memory and tokens used.",
+  "description": "Run a model validated for your GPU, or one across several, and open any coding agent on it, with GPU temperature, memory and your token history.",
   "kinds": [
     "bar-widget"
   ],

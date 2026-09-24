@@ -21,6 +21,10 @@ Panel {
   readonly property color surface: Util.alpha(theme, 0.06)
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property string mono: bar ? bar.fontFamily : Style.font.family
+  // Nerd Font glyphs for the icon names Model.js uses
+  readonly property var glyphs: ({ gpu: 0xf08ae, memory: 0xf035b, temp: 0xf050f, context: 0xf09aa, weights: 0xf01a7, vision: 0xf06d0,
+    speed: 0xf140c, tokens: 0xf04a0, agent: 0xf07b7, folder: 0xf0256, machine: 0xf0379, tailnet: 0xf0317, check: 0xf012c, down: 0xf0140 })
+  function glyph(name) { return glyphs[name] ? String.fromCodePoint(glyphs[name]) : "" }
 
   // Four tones, each picked by the APCA contrast it must reach on a card (Model.tones): ink for what matters
   // now (a model's name, the primary action, a choice made), value for what a label names, one tone for every
@@ -39,6 +43,14 @@ Panel {
   readonly property int edge: Style.space(8)
   readonly property int pad: gutter - edge
   readonly property int rowH: Style.space(22)
+  // the chart borders breathe between 12% and 26% of the ink, slowly, while the panel is open
+  property real glow: 0.12
+  SequentialAnimation on glow {
+    running: root.opened
+    loops: Animation.Infinite
+    NumberAnimation { to: 0.26; duration: 1800; easing.type: Easing.InOutSine }
+    NumberAnimation { to: 0.12; duration: 1800; easing.type: Easing.InOutSine }
+  }
   readonly property int headH: Style.space(16)
   readonly property int groupGap: Style.space(20)
   readonly property int blockGap: Style.space(8)
@@ -46,6 +58,7 @@ Panel {
 
   property var snap: ({})
   property var ui: ({ view: "home", id: "", open: "", key: "", problem: "" })
+  property bool copied: false
   property bool revealed: false
   property var queue: []
   // A snapshot the view cannot read says so, rather than looking like a machine with no GPU
@@ -53,14 +66,16 @@ Panel {
     try {
       return Model.build(snap, ui)
     } catch (e) {
-      return { title: "LOCAL AI", right: "", mark: "failed", rows: [{ type: "error", label: "could not read the backend's answer: " + e.message }] }
+      return { title: "LOCAL AI", mark: "failed", rows: [{ type: "error", label: "could not read the backend's answer: " + e.message }] }
     }
   }
 
+  // a new view starts at its top with nothing chosen; within a view, a chosen model stays chosen
   function nav(patch) {
-    ui = Object.assign({ view: ui.view, id: ui.id, open: "", key: ui.key, problem: "" }, patch)
+    var moved = patch.view !== undefined || patch.id !== undefined
+    ui = Object.assign({ view: ui.view, id: ui.id, open: "", key: ui.key, problem: "", model: moved ? "" : ui.model || "" }, patch)
     revealed = false
-    flick.contentY = 0
+    if (moved) flick.contentY = 0
   }
   function home() { nav({ view: "home", id: "", key: "" }) }
   function run(args) { queue.push(args); if (!verb.running) next() }
@@ -91,17 +106,15 @@ Panel {
     case "share": run(["share", a[1]]); break
     case "set": run(["set", a[1], a[2]].concat(a[3] ? [a[3]] : [])); nav({ open: "" }); break
     case "more": nav({ view: "run", id: a[1] }); break
-    case "kind": nav({ view: "kind", id: a[1], key: "" }); break
-    case "tick": nav({ key: a[1] }); break
+    case "kind": nav({ view: "kind", id: a[1], key: a[2] || "" }); break
+    case "group": nav({ view: "group", id: a[1], key: a[2] }); break
+    case "model": nav({ model: a[1] }); break
+    case "gpus": nav({ view: "gpus", id: "" }); break
     case "pick": nav({ open: ui.open === a[1] ? "" : a[1] }); break
     case "home": home(); break
     case "log": logOpen.running = true; root.close(); break
     case "url": Quickshell.execDetached(["omarchy-launch-browser", a[1]]); root.close(); break
-    case "copy":
-      if (revealed) copy.command = ["wl-copy", a[1]]
-      copy.running = revealed
-      revealed = true
-      break
+    case "copy": copy.command = ["wl-copy", a[1]]; copy.running = true; copied = true; copiedTimer.restart(); break
     }
   }
 
@@ -125,6 +138,7 @@ Panel {
     }
   }
   Process { id: copy }
+  Timer { id: copiedTimer; interval: 1500; onTriggered: root.copied = false }
   Process { id: logOpen; command: [root.cli, "log"] }
   Timer {
     interval: root.view.mark === "busy" ? 1500 : root.opened ? 5000 : 30000
@@ -199,7 +213,7 @@ Panel {
           bottomPadding: Style.space(16)
           spacing: 0
 
-          // The top line: the name and version, or the way back; on home, this week's tokens
+          // The top line: the name and version, or the way back
           Item {
             width: parent.width
             height: root.headH
@@ -216,18 +230,10 @@ Panel {
               anchors.leftMargin: Style.space(8)
               anchors.baseline: head.baseline
               text: root.view.version || ""
-              color: root.labelTone
+              color: Util.alpha(root.labelTone, 0.55)
+              font.pixelSize: Style.font.caption - 2
             }
             Click { anchors.fill: head; action: root.view.back ? "home" : "" }
-            Row {
-              visible: !!root.view.stat
-              anchors.right: parent.right
-              anchors.rightMargin: root.gutter
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(6)
-              Label { text: root.view.stat || "" }
-              Label { text: root.view.statLabel || ""; color: root.labelTone }
-            }
           }
 
           Item {
@@ -244,11 +250,11 @@ Panel {
           }
 
           Repeater {
-            model: root.view.rows
+            // keyed by position, so a refresh updates rows in place instead of rebuilding them (no flicker)
+            model: (root.view.rows || []).length
             Item {
-              required property var modelData
               required property int index
-              readonly property var r: modelData
+              readonly property var r: (root.view.rows || [])[index] || ({ type: "" })
               readonly property int gap: root.gapBefore(index)
               width: content.width
               height: gap + row.height
@@ -260,112 +266,264 @@ Panel {
                 x: inset
                 y: parent.gap
                 width: parent.width - 2 * inset
-                sourceComponent: ({ run: runC, free: freeC, soon: soonC, busy: busyC, grid: gridC, gpu: gpuC,
-                  field: fieldC, opt: optC, path: pathC, acts: actsC })[r.type] || textC
+                sourceComponent: ({ life: lifeC, run: runC, slot: slotC, links: linksC, soon: soonC, grid: gridC, gpu: gpuC,
+                  field: fieldC, opt: optC, path: pathC, acts: linksC })[r.type] || textC
               }
 
-              // A running model: its all-time token line behind its name, card, speed and tokens; Open and More
+              // Your lifetime: the totals, then the activity grid (a column a week, a row a weekday) with its months
+              Component {
+                id: lifeC
+                Column {
+                  id: life
+                  objectName: "local-ai-life"
+                  readonly property int cols: Math.ceil((r.cells || []).length / 7)
+                  readonly property real cell: Math.min(Style.space(12), (width - 2 * root.gutter - (cols - 1) * Style.space(3)) / cols)
+                  // the hovered day, whose date and tokens replace "since" at the top right
+                  property int hover: -1
+                  spacing: Style.space(10)
+                  Item {
+                    width: parent.width
+                    height: lifeTokens.implicitHeight
+                    Row {
+                      x: root.gutter
+                      spacing: Style.space(10)
+                      Label { id: lifeTokens; text: r.tokens; color: root.ink }
+                      Label { anchors.baseline: lifeTokens.baseline; text: r.requests; color: root.labelTone }
+                    }
+                    Right {
+                      margin: root.gutter
+                      text: life.hover >= 0 ? (r.labels || [])[life.hover] || "" : r.since
+                      color: life.hover >= 0 ? root.ink : root.labelTone
+                    }
+                  }
+                  Grid {
+                    x: root.gutter
+                    rows: 7
+                    flow: Grid.TopToBottom
+                    spacing: Style.space(3)
+                    Repeater {
+                      model: r.cells || []
+                      Rectangle {
+                        required property var modelData
+                        required property int index
+                        width: life.cell
+                        height: life.cell
+                        radius: 2
+                        color: modelData < 0 ? "transparent" : Util.alpha(root.theme, [0.07, 0.25, 0.45, 0.7, 0.95][modelData])
+                        border.width: life.hover === index ? 1 : 0
+                        border.color: root.ink
+                        MouseArea {
+                          anchors.fill: parent
+                          enabled: modelData >= 0
+                          hoverEnabled: true
+                          onEntered: life.hover = index
+                          onExited: if (life.hover === index) life.hover = -1
+                        }
+                      }
+                    }
+                  }
+                  Item {
+                    width: parent.width
+                    height: Style.space(12)
+                    Repeater {
+                      model: r.months || []
+                      Label {
+                        required property var modelData
+                        x: root.gutter + modelData.col * (life.cell + Style.space(3))
+                        text: modelData.label
+                        color: root.labelTone
+                        font.pixelSize: Style.font.caption - 1
+                      }
+                    }
+                  }
+                }
+              }
+
+              // A running model: its all-time token line across the whole card, behind its name, card, speed and
+              // tokens; Open and More
               Component {
                 id: runC
                 Rectangle {
-                  height: body.implicitHeight + 2 * root.pad
-                  color: r.error ? Util.alpha(root.urgent, 0.07) : root.surface
+                  height: Style.space(156)
+                  // a little above the page: a lighter surface, and a light border that glows slowly
+                  color: Util.alpha(root.theme, 0.08)
+                  border.width: 1
+                  border.color: Util.alpha(root.theme, root.glow)
                   clip: true
-                  Line { anchors.fill: parent; values: r.line; stroke: false }
+                  Line { anchors.fill: parent; values: r.line }
                   Column {
-                    id: body
                     x: root.pad
-                    y: root.pad
+                    y: Style.space(16)
                     width: parent.width - 2 * root.pad
-                    spacing: Style.space(4)
+                    spacing: Style.space(6)
                     Row {
-                      spacing: Style.space(8)
-                      Logo { family: r.family; size: 14; anchors.verticalCenter: parent.verticalCenter }
-                      Label { text: r.name; color: root.ink; font.pixelSize: Style.font.body }
+                      spacing: Style.space(10)
+                      Logo { family: r.family; size: 18; anchors.verticalCenter: parent.verticalCenter }
+                      Label { text: r.name; color: root.ink; font.pixelSize: Style.font.subtitle }
                     }
-                    Label { width: parent.width; text: r.gpu; elide: Text.ElideRight }
+                    Row {
+                      spacing: Style.space(10)
+                      Label { text: r.gpu; color: root.labelTone }
+                      Label { visible: !!r.mem; text: r.mem || ""; color: Util.alpha(root.labelTone, 0.6) }
+                    }
+                    Item { width: 1; height: Style.space(4) }
                     Label {
+                      visible: !!r.sub
                       width: parent.width
-                      text: r.sub.join(" · ")
-                      color: r.error ? root.alertTone : root.valueTone
+                      text: r.sub || ""
+                      color: root.valueTone
                       wrapMode: Text.WordWrap
                       maximumLineCount: 2
                       elide: Text.ElideRight
                     }
-                    Item {
+                    Rectangle {
                       visible: r.progress >= 0
                       width: parent.width
-                      height: Style.space(6)
-                      Rectangle {
-                        anchors.bottom: parent.bottom
-                        width: parent.width
-                        height: 2
-                        color: root.ruleTone
-                        Rectangle { width: parent.width * (r.progress || 0) / 100; height: parent.height; color: root.ink }
-                      }
+                      height: 2
+                      color: root.ruleTone
+                      Rectangle { width: parent.width * (r.progress || 0) / 100; height: parent.height; color: root.ink }
                     }
-                    Item { width: 1; height: Style.space(8) }
-                    Row {
-                      spacing: Style.space(8)
-                      Btn {
-                        label: r.primary.label + (r.primary.quiet ? "" : " ›")
-                        action: r.primary.action
-                        primary: !r.primary.quiet
-                        danger: !!r.primary.quiet
-                      }
-                      Btn { label: "More"; action: r.more }
+                  }
+                  // speed and tokens, small, in the bottom-right corner, level with the buttons
+                  Chips {
+                    items: r.chips || []
+                    anchors.right: parent.right
+                    anchors.rightMargin: root.pad
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: Style.space(20)
+                    size: Style.font.caption - 1
+                  }
+                  Row {
+                    x: root.pad
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: Style.space(14)
+                    spacing: Style.space(8)
+                    Btn {
+                      label: r.primary.label + (r.primary.quiet ? "" : " ›")
+                      action: r.primary.action
+                      primary: !r.primary.quiet
+                      danger: !!r.primary.quiet
                     }
+                    Btn { label: "More"; action: r.more }
                   }
                 }
               }
 
-              // A free card kind, one row in the GPUs list: its left opens the kind's page, its right runs the model
+              // One GPU: its name, and on the right one quick action (the model to run on it, or run again) or what
+              // it is doing; a crashed one also offers dismiss beside it, and is framed in dashes. Clicking the row
+              // opens a line under it with the rest.
               Component {
-                id: freeC
+                id: slotC
                 Item {
-                  height: root.rowH
-                  Label { id: kindLabel; x: root.gutter; anchors.verticalCenter: parent.verticalCenter; text: r.label }
-                  Click { anchors.fill: kindLabel; action: r.more }
+                  height: r.crashed ? Style.space(34) : root.rowH
+                  Canvas {
+                    visible: !!r.crashed
+                    x: root.edge
+                    width: parent.width - 2 * root.edge
+                    height: parent.height
+                    onPaint: {
+                      var g = getContext("2d")
+                      g.clearRect(0, 0, width, height)
+                      g.setLineDash([3, 3])
+                      g.strokeStyle = root.alertRule
+                      g.strokeRect(0.5, 0.5, width - 1, height - 1)
+                    }
+                  }
+                  Click { action: r.toggle || "" }
                   Row {
-                    id: runLink
+                    x: root.gutter
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(10)
+                    Label { text: r.label; color: r.open ? root.ink : root.valueTone }
+                    Label { visible: !!r.hint; text: r.hint || ""; color: root.alertTone }
+                  }
+                  Row {
+                    id: slotRun
+                    visible: !!r.run
                     anchors.right: parent.right
                     anchors.rightMargin: root.gutter
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.space(6)
-                    Logo { family: r.family; size: 12; anchors.verticalCenter: parent.verticalCenter }
-                    Label { text: "run " + r.model + " ›"; color: root.ink }
+                    Logo { family: r.run && r.run.family || ""; size: 12; anchors.verticalCenter: parent.verticalCenter }
+                    Label { text: r.run ? r.run.label : ""; color: root.ink }
                   }
-                  Click { anchors.fill: runLink; action: r.action || r.more }
+                  Click { anchors.fill: slotRun; action: r.run ? r.run.action : "" }
+                  Label {
+                    id: slotDismiss
+                    visible: !!r.dismiss
+                    anchors.right: slotRun.left
+                    anchors.rightMargin: Style.space(16)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "dismiss"
+                    color: root.labelTone
+                  }
+                  Click { anchors.fill: slotDismiss; action: r.dismiss || "" }
+                  Right {
+                    visible: !r.run
+                    margin: root.gutter
+                    text: r.note || ""
+                    color: r.warn ? root.alertTone : root.labelTone
+                  }
                 }
               }
 
-              // No card to run on: a chip, one line, and where the list of supported cards lives
+              // A row of buttons, with what there is to know above it: the line a GPU row opens, or a page's actions
+              Component {
+                id: linksC
+                Column {
+                  topPadding: Style.space(2)
+                  bottomPadding: Style.space(10)
+                  spacing: Style.space(8)
+                  Chips { visible: (r.chips || []).length > 0; x: root.gutter; items: r.chips || [] }
+                  Label { visible: !!r.note; x: root.gutter; width: parent.width - 2 * root.gutter; text: r.note || ""; color: root.labelTone; wrapMode: Text.WordWrap }
+                  // the same buttons as a model card's: filled for the main action, outlined for the rest
+                  Flow {
+                    visible: (r.items || []).length > 0
+                    x: root.gutter
+                    width: parent.width - 2 * root.gutter
+                    spacing: Style.space(8)
+                    Repeater {
+                      model: r.items || []
+                      Btn {
+                        required property var modelData
+                        label: modelData.label
+                        action: modelData.action
+                        primary: !!modelData.primary
+                        danger: !!modelData.danger
+                      }
+                    }
+                  }
+                }
+              }
+
+              // No card to run on: a square wave, one line, and where the list of supported cards lives
               Component {
                 id: soonC
                 Column {
                   topPadding: Style.space(28)
                   bottomPadding: Style.space(20)
                   spacing: Style.space(18)
+                  // a square wave drifting left, thin and quiet, fading out at both ends
                   Canvas {
+                    id: wave
+                    property real phase: 0
                     anchors.horizontalCenter: parent.horizontalCenter
-                    width: Style.space(64)
-                    height: width
+                    width: Style.space(140)
+                    height: Style.space(18)
+                    NumberAnimation on phase { from: 0; to: 1; duration: 2400; loops: Animation.Infinite; running: root.opened }
+                    onPhaseChanged: requestPaint()
                     onPaint: {
-                      var g = getContext("2d"), a = width * 0.22, b = width * 0.78, p = width * 0.12
+                      var g = getContext("2d"), p = Style.space(28), lo = height - 2, hi = 2
                       g.clearRect(0, 0, width, height)
-                      g.strokeStyle = root.labelTone
-                      g.lineWidth = 1.5
-                      g.strokeRect(a, a, b - a, b - a)
-                      g.strokeRect(width * 0.38, width * 0.38, width * 0.24, width * 0.24)
-                      for (var i = 0; i < 4; i++) {
-                        var t = a + (b - a) * (i + 0.5) / 4
-                        g.beginPath()
-                        g.moveTo(t, a); g.lineTo(t, p)
-                        g.moveTo(t, b); g.lineTo(t, width - p)
-                        g.moveTo(a, t); g.lineTo(p, t)
-                        g.moveTo(b, t); g.lineTo(width - p, t)
-                        g.stroke()
+                      g.beginPath()
+                      for (var x = -phase * p - p; x < width + p; x += p) {
+                        g.moveTo(x, lo); g.lineTo(x, hi); g.lineTo(x + p / 2, hi); g.lineTo(x + p / 2, lo); g.lineTo(x + p, lo)
                       }
+                      var f = g.createLinearGradient(0, 0, width, 0)
+                      f.addColorStop(0, "transparent"); f.addColorStop(0.25, root.labelTone); f.addColorStop(0.75, root.labelTone); f.addColorStop(1, "transparent")
+                      g.strokeStyle = f
+                      g.lineWidth = 1.5
+                      g.stroke()
                     }
                   }
                   Label {
@@ -376,17 +534,6 @@ Panel {
                     wrapMode: Text.WordWrap
                   }
                   Btn { anchors.horizontalCenter: parent.horizontalCenter; label: "See supported cards ›"; action: r.action }
-                }
-              }
-
-              // A card Local AI cannot use, one row in the GPUs list with why: another program holds it (a problem),
-              // or no model is validated for it yet (a fact)
-              Component {
-                id: busyC
-                Item {
-                  height: root.rowH
-                  Label { x: root.gutter; anchors.verticalCenter: parent.verticalCenter; text: r.label }
-                  Right { margin: root.gutter; text: r.note; color: r.warn ? root.alertTone : root.labelTone }
                 }
               }
 
@@ -434,19 +581,72 @@ Panel {
                 }
               }
 
-              Component { id: gpuC; GpuRow { g: r; height: root.rowH; inset: root.gutter } }
+              // One card: its name (and what holds it), memory in use, temperature
+              Component {
+                id: gpuC
+                Item {
+                  height: r.status ? Style.space(36) : root.rowH
+                  Column {
+                    x: root.gutter
+                    width: Style.space(100)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(2)
+                    Label { width: parent.width; text: r.name; elide: Text.ElideRight }
+                    Label { visible: !!text; text: r.status || ""; color: root.labelTone }
+                  }
+                  Rectangle {
+                    x: root.gutter + Style.space(104)
+                    visible: r.bar
+                    width: Math.max(0, gpuMem.x - x - Style.space(12))
+                    height: 3
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: root.ruleTone
+                    Rectangle {
+                      width: parent.width * r.pct / 100
+                      height: parent.height
+                      color: root.valueTone
+                    }
+                  }
+                  Right { id: gpuMem; margin: root.gutter; text: r.mem + (r.temp ? "  " + r.temp : "") }
+                }
+              }
 
-              // A label on the left, a value on the right; a secret value is blurred until clicked
+              // A label on the left, a value on the right; a secret value stays hidden, small, until clicked, beside an always-on copy
               Component {
                 id: fieldC
                 Item {
                   height: root.rowH
-                  Label { x: root.gutter; anchors.verticalCenter: parent.verticalCenter; text: r.label; color: root.labelTone }
-                  Right {
-                    margin: root.gutter
-                    text: r.secret && !root.revealed ? r.value.replace(/[^.:\/]/g, "•") : r.value + (r.secret ? "  copy" : r.action ? " ›" : "")
+                  Row {
+                    id: fieldLabel
+                    x: root.gutter
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+                    Label { visible: !!r.icon; width: Style.space(12); text: root.glyph(r.icon || ""); color: root.labelTone }
+                    Logo { family: r.logo || ""; size: 12; anchors.verticalCenter: parent.verticalCenter }
+                    Label { text: r.label; color: root.labelTone }
                   }
-                  Click { action: r.action || "" }
+                  // a long value (a weights repository) gives way in its middle rather than run over the label
+                  Right {
+                    id: fieldValue
+                    margin: root.gutter
+                    width: Math.min(implicitWidth, parent.width - fieldLabel.x - fieldLabel.width - root.gutter - Style.space(16))
+                    elide: Text.ElideMiddle
+                    text: r.secret ? (root.copied ? "copied" : "copy") : r.value + (r.drop ? "  " + root.glyph("down") : r.action ? " ›" : "")
+                    color: r.open ? root.ink : root.valueTone
+                  }
+                  Label {
+                    id: secretValue
+                    visible: !!r.secret
+                    anchors.right: fieldValue.left
+                    anchors.rightMargin: Style.space(10)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: !r.secret ? "" : root.revealed ? r.value : r.value.replace(/[^.:\/]+/g, "•••")
+                    color: Util.alpha(root.labelTone, root.revealed ? 1 : 0.55)
+                    font.pixelSize: Style.font.caption - 2
+                  }
+                  Click { visible: !r.secret; action: r.action || "" }
+                  Click { visible: !!r.secret; anchors.fill: fieldValue; action: r.action || "" }
+                  MouseArea { visible: !!r.secret; anchors.fill: secretValue; cursorShape: Qt.PointingHandCursor; onClicked: root.revealed = !root.revealed }
                 }
               }
 
@@ -454,7 +654,14 @@ Panel {
                 id: optC
                 Item {
                   height: root.rowH
-                  Label { x: root.gutter + Style.space(12); anchors.verticalCenter: parent.verticalCenter; text: (r.on ? "● " : "○ ") + r.label; color: r.on ? root.ink : root.valueTone }
+                  Row {
+                    x: root.gutter
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+                    Label { width: Style.space(12); text: r.on ? root.glyph("check") : ""; color: root.ink }
+                    Label { text: r.label; color: r.on ? root.ink : root.valueTone }
+                  }
+                  Right { visible: !!r.value; margin: root.gutter; text: r.value || ""; color: root.labelTone }
                   Click { action: r.action }
                 }
               }
@@ -472,7 +679,7 @@ Panel {
                     color: root.ink
                     font.family: root.mono
                     font.pixelSize: Style.font.caption
-                    background: Box {}
+                    background: Rectangle { color: "transparent"; border.width: 1; border.color: root.ruleTone }
                     onAccepted: {
                       var path = text.indexOf("~") === 0 ? Quickshell.env("HOME") + text.slice(1) : text
                       root.activate("set|folder|" + path + "|" + r.id)
@@ -481,23 +688,6 @@ Panel {
                 }
               }
 
-              Component {
-                id: actsC
-                Row {
-                  leftPadding: root.gutter
-                  spacing: Style.space(8)
-                  Repeater {
-                    model: r.items
-                    Btn {
-                      required property var modelData
-                      label: modelData.label
-                      action: modelData.action
-                      primary: !!modelData.primary
-                      danger: !!modelData.danger
-                    }
-                  }
-                }
-              }
             }
           }
         }
@@ -514,8 +704,23 @@ Panel {
     font.pixelSize: Style.font.caption
   }
 
-  // A hairline frame
-  component Box: Rectangle { color: "transparent"; border.width: 1; border.color: root.ruleTone }
+  // Facts as small icon-and-text pairs, spaced instead of joined with dots
+  component Chips: Flow {
+    id: chips
+    property var items: []
+    property color tone: root.labelTone
+    property int size: Style.font.caption
+    spacing: Style.space(12)
+    Repeater {
+      model: chips.items
+      Row {
+        required property var modelData
+        spacing: Style.space(4)
+        Label { visible: !!modelData.icon; text: root.glyph(modelData.icon || ""); color: root.labelTone; font.pixelSize: chips.size }
+        Label { visible: !!modelData.text; text: modelData.text || ""; color: chips.tone; font.pixelSize: chips.size }
+      }
+    }
+  }
 
   // A label against its row's right edge
   component Right: Label {
@@ -539,62 +744,17 @@ Panel {
     property int size
     width: Style.space(size)
     height: width
-    visible: !!family
+    // a family without a logo file takes no space
+    visible: !!family && status === Image.Ready
     source: family ? Qt.resolvedUrl(family + ".svg") : ""
     sourceSize: Qt.size(Style.space(32), Style.space(32))
     fillMode: Image.PreserveAspectFit
   }
 
-  // One card: a box to tick when there is a choice, its name (and what holds it), memory in use, temperature.
-  // The ticked card is the one choice made, so it is ink; a card that cannot be picked drops to the label tone.
-  component GpuRow: Item {
-    id: gpu
-    property var g
-    property int inset
-    readonly property bool box: g.check !== undefined
-    readonly property color tone: g.disabled ? root.labelTone : g.check ? root.ink : root.valueTone
-    width: parent.width
-    height: Style.space(36)
-    Rectangle {
-      visible: gpu.box
-      x: gpu.inset
-      width: Style.space(10)
-      height: width
-      anchors.verticalCenter: parent.verticalCenter
-      color: gpu.g.check ? root.ink : "transparent"
-      border.width: 1
-      border.color: gpu.g.disabled ? root.ruleTone : root.valueTone
-    }
-    Column {
-      x: gpu.inset + (gpu.box ? Style.space(20) : 0)
-      width: Style.space(100)
-      anchors.verticalCenter: parent.verticalCenter
-      spacing: Style.space(2)
-      Label { width: parent.width; text: gpu.g.name; color: gpu.tone; elide: Text.ElideRight }
-      Label { visible: !!text; text: gpu.g.status || ""; color: root.labelTone }
-    }
-    Rectangle {
-      x: gpu.inset + Style.space(gpu.box ? 124 : 104)
-      visible: gpu.g.bar
-      width: Math.max(0, mem.x - x - Style.space(12))
-      height: 3
-      anchors.verticalCenter: parent.verticalCenter
-      color: root.ruleTone
-      Rectangle {
-        width: parent.width * gpu.g.pct / 100
-        height: parent.height
-        color: gpu.g.disabled ? root.labelTone : root.valueTone
-      }
-    }
-    Right { id: mem; margin: gpu.inset; text: gpu.g.mem + (gpu.g.temp ? "  " + gpu.g.temp : ""); color: gpu.g.disabled ? root.labelTone : root.valueTone }
-    Click { action: gpu.g.action || "" }
-  }
 
-  // Tokens over time, cumulative, rising to the right. Where text sits on it (a card on home) it is only a faint
-  // area, which leaves the text's contrast as it is; on a model's page it also gets its line, in the rule tone.
+  // Tokens over time, cumulative, rising to the right: a dim line over a faint area, so text over it keeps its contrast
   component Line: Canvas {
     property var values: []
-    property bool stroke: true
     onValuesChanged: requestPaint()
     Component.onCompleted: requestPaint()
     onPaint: {
@@ -607,15 +767,13 @@ Panel {
         if (i) g.lineTo(x, y)
         else g.moveTo(x, y)
       }
-      if (stroke) {
-        g.strokeStyle = root.ruleTone
-        g.lineWidth = 1.2
-        g.stroke()
-      }
+      g.strokeStyle = Qt.rgba(root.ink.r, root.ink.g, root.ink.b, 0.25)
+      g.lineWidth = 1.2
+      g.stroke()
       g.lineTo(width, height)
       g.lineTo(0, height)
       g.closePath()
-      g.fillStyle = Qt.rgba(root.theme.r, root.theme.g, root.theme.b, stroke ? 0.04 : 0.05)
+      g.fillStyle = Qt.rgba(root.ink.r, root.ink.g, root.ink.b, 0.06)
       g.fill()
     }
   }
@@ -653,7 +811,7 @@ Panel {
   }
 
   // The top of a model's page: its name, what it is, and a surface under them (its token line with the scale
-  // and dates, or a free kind's cards to tick)
+  // and dates, when it runs)
   component Hero: Column {
     property var h
     spacing: 0
@@ -666,34 +824,23 @@ Panel {
         Logo { family: h.family; size: 14; anchors.verticalCenter: parent.verticalCenter }
         Label { text: h.name; color: root.ink; font.pixelSize: Style.font.body }
       }
-      Label { width: parent.width; text: h.sub; elide: Text.ElideRight }
-      Label { width: parent.width; visible: !!text; text: h.caps || ""; elide: Text.ElideRight }
+      Chips { width: parent.width; items: h.chips || []; tone: root.valueTone }
     }
     Item { width: 1; height: root.topGap }
+    // a running model's token line, edge to edge, with its numbers over it (a free card has none)
     Rectangle {
+      visible: !!h.line
       width: parent.width
-      height: h.gpus ? h.gpus.length * Style.space(36) + Style.space(12) : Style.space(110)
+      height: visible ? Style.space(110) : 0
       color: root.surface
+      border.width: 1
+      border.color: Util.alpha(root.theme, root.glow)
       clip: true
-      // The same token line as on home, edge to edge, with its numbers over it
-      Item {
-        anchors.fill: parent
-        visible: !h.gpus
-        Line { anchors.fill: parent; values: h.line || [] }
-        Label { x: root.pad; y: Style.space(8); text: h.top || ""; color: root.labelTone }
-        Label { x: root.pad; y: parent.height / 2 - height / 2; text: h.mid || ""; color: root.labelTone }
-        Label { x: root.pad; y: parent.height - Style.space(8) - height; text: h.since || ""; color: root.labelTone }
-        Label { x: parent.width - root.pad - width; y: parent.height - Style.space(8) - height; text: h.now || ""; color: root.labelTone }
-      }
-      Column {
-        y: Style.space(6)
-        width: parent.width
-        visible: !!h.gpus
-        Repeater {
-          model: h.gpus || []
-          GpuRow { required property var modelData; g: modelData; inset: root.pad }
-        }
-      }
+      Line { anchors.fill: parent; values: h.line || [] }
+      Label { x: root.pad; y: Style.space(8); text: h.top || ""; color: root.labelTone }
+      Label { x: root.pad; y: parent.height / 2 - height / 2; text: h.mid || ""; color: root.labelTone }
+      Label { x: root.pad; y: parent.height - Style.space(8) - height; text: h.since || ""; color: root.labelTone }
+      Label { x: parent.width - Style.space(6) - width; y: parent.height - Style.space(8) - height; text: h.now || ""; color: root.labelTone }
     }
   }
 }
