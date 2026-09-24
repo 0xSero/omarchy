@@ -29,30 +29,34 @@ Object.entries(themes).forEach(([name, [ink, bg, urgent]]) => {
   assert(lc(hex(bg), t.ink) >= model.LC.value, `local-ai ${name} primary button text is readable on ink`)
 })
 
-// Home: working models first, then one row per GPU; cards of one kind sit under a header with their count
+// Home: running models as cards, then the available GPUs as rows; the rest is one "all GPUs" away
 const recipe = { id: 'q', name: 'Qwen3.8-27B', family: 'qwen', caps: {}, weights: [] }
 const snap = {
   version: '1.0.0', week: 925200, total: 4210000,
   gpus: [{ key: 'a0', name: 'Arc Pro B70', hw: 'arc', vramGb: 32 }, { key: 'a1', name: 'Arc Pro B70', hw: 'arc', vramGb: 32 },
-    { key: 'n0', name: 'RTX 3090', hw: '3090', vramGb: 24 }, { key: 'r0', name: 'Radeon RX 6600', hw: '', vramGb: 8 }],
-  kinds: [{ hw: 'arc', name: 'Arc Pro B70', keys: ['a0', 'a1'], free: ['a1'], taken: [], recipe }, { hw: '3090', name: 'RTX 3090', keys: ['n0'], free: [], taken: ['n0'], recipe }],
+    { key: 'a2', name: 'Arc Pro B70', hw: 'arc', vramGb: 32 }, { key: 'n0', name: 'RTX 3090', hw: '3090', vramGb: 24 },
+    { key: 'r0', name: 'Radeon RX 6600', hw: '', vramGb: 8 }],
+  kinds: [{ hw: 'arc', name: 'Arc Pro B70', keys: ['a0', 'a1', 'a2'], free: ['a1', 'a2'], taken: [], recipe, groups: [{ id: 'q2', name: 'Qwen3.8-27B', cards: 2 }] },
+    { hw: '3090', name: 'RTX 3090', keys: ['n0'], free: [], taken: ['n0'], recipe }],
   deployments: [{ id: 'd', name: 'Qwen3.8-27B', keys: ['a0'], state: 'ready', agent: 'pi', session: { all: { tokens: 10 } } }],
 }
 const home = model.build(snap, { view: 'home' })
-assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'slot', 'slot', 'slot', 'slot'], 'local-ai home lists working models, then one row per GPU')
-assertDeepEqual(home.rows.slice(2).map(r => [r.label, r.rank]), [['Arc Pro B70', 0], ['Arc Pro B70', 1], ['RTX 3090', 3], ['Radeon RX 6600', 4]], 'local-ai free GPUs come first, then running, held and unsupported ones, unnumbered')
-assertEqual(home.rows[2].run.action, 'run|q|a1', 'local-ai a free GPU runs its model in one click')
-assertEqual(home.rows[3].note, 'running Qwen3.8-27B', 'local-ai a GPU running a model says so')
-assert(home.rows[4].warn && !home.rows[5].warn, 'local-ai only a card held by another program is a warning')
+assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'slot', 'slot', 'field'], 'local-ai home: running cards, then available GPUs, then all GPUs')
+assertDeepEqual(home.rows.slice(2, 4).map(r => [r.label, r.run.action]), [['Arc Pro B70', 'run|q|a1'], ['Arc Pro B70', 'run|q|a2']], 'local-ai only free GPUs are listed, each running its model in one click')
+assertDeepEqual([home.rows[4].label, home.rows[4].value, home.rows[4].action], ['all GPUs', '5', 'gpus'], 'local-ai the rest of the GPUs are one link away')
 assertDeepEqual([home.stat, home.statLabel], ['4.2M', 'all time'], 'local-ai home shows all-time tokens as value and label')
 
-// Clicking a GPU's row opens a line under it with the rest of what can be done with it
+// Opening a free GPU: run it, run one model across it and another free card of its kind, or choose agent and folder
 const opened = model.build(snap, { view: 'home', open: 'gpu:a1' }).rows
-assertDeepEqual([opened[3].type, opened[3].items.map(a => a.action)], ['links', ['run|q|a1', 'kind|arc|a1']], 'local-ai a free GPU opens to run or choose agent and folder')
+assertDeepEqual(opened[3].items.map(a => a.action), ['run|q|a1', 'run|q2|a1,a2', 'kind|arc|a1'], 'local-ai a free GPU offers a group across free cards of its kind')
 
-// A crashed model is its GPU's row: run it again in one click, or open it for the reason, the log and dismiss
+// All GPUs: every card with what it is doing
+const all = model.build(snap, { view: 'gpus' }).rows
+assertDeepEqual(all.slice(1).map(r => r.status), ['running Qwen3.8-27B', 'free', 'free', 'in use by another program', 'no validated model yet'], 'local-ai the GPUs page lists every card and its state')
+
+// A crashed model is an available GPU's row: run it again in one click, or open it for the reason, the log and dismiss
 const crashed = Object.assign({}, snap, { deployments: [Object.assign({}, snap.deployments[0], { id: 'x', state: 'error', error: 'the engine stopped' })] })
 const rows = model.build(crashed, { view: 'home', open: 'gpu:a0' }).rows
-assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'links', 'slot', 'slot'], 'local-ai a crashed model is not a card')
-assertDeepEqual([rows[2].crashed, rows[2].run.action, rows[3].note, rows[3].items.map(a => a.action)], [true, 'again|x|a0', 'the engine stopped', ['again|x|a0', 'log', 'stop|x']], 'local-ai a crashed GPU runs again, shows why, or is dismissed (stopped)')
+assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'slot', 'links', 'field'], 'local-ai a crashed model is a row after the free ones')
+assertDeepEqual([rows[3].crashed, rows[3].run.action, rows[4].note, rows[4].items.map(a => a.action)], [true, 'again|x|a0', 'the engine stopped', ['again|x|a0', 'log', 'stop|x']], 'local-ai a crashed GPU runs again, shows why, or is dismissed (stopped)')
 JS
