@@ -45,8 +45,11 @@ assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'slot', 'slot', 'slot
 assertDeepEqual(home.rows.slice(2, 4).map(r => [r.label, r.run.action]), [['Arc Pro B70', 'run|q|a1'], ['Arc Pro B70', 'run|q|a2']], 'local-ai only free GPUs are listed, each running its model in one click')
 assertDeepEqual([home.rows[4].label, home.rows[4].run.action], ['2 × Arc Pro B70', 'run|q2|a1,a2'], 'local-ai two free cards of a kind are also offered as a group, its own row')
 assertDeepEqual([home.rows[5].label, home.rows[5].value, home.rows[5].action], ['all GPUs', '5', 'gpus'], 'local-ai the rest of the GPUs are one link away')
-const lived = model.build(Object.assign({}, snap, { life: { requests: 1204, since: 'Sep 23', last: Date.now() / 1000, line: [1, 5, 9] } }), { view: 'home' }).rows
-assertDeepEqual([lived[0].type, lived[0].tokens, lived[0].requests, lived[0].now, lived[1].type], ['life', '4.2M tokens', '1.2K requests', 'now', 'run'], 'local-ai home leads with your lifetime line, tokens and requests, above the running models')
+const may4 = new Date(2026, 4, 4).getTime() / 1000, days = Array(140).fill(0); days[3] = 50; days[10] = 200
+const lived = model.build(Object.assign({}, snap, { life: { requests: 1204, since: 'May 7', start: may4, today: 12, days } }), { view: 'home' }).rows
+assertDeepEqual([lived[0].type, lived[0].tokens, lived[0].requests, lived[0].since, lived[1].type], ['life', '4.2M tokens', '1.2K requests', 'since May 7', 'run'], 'local-ai home leads with your lifetime, tokens and requests, above the running models')
+assertDeepEqual([lived[0].cells.length, lived[0].cells[3], lived[0].cells[10], lived[0].cells[11], lived[0].cells[13]], [140, 1, 4, 0, -1], 'local-ai each day is shaded against your busiest, and days to come are blank')
+assertDeepEqual(lived[0].months.map(m => m.label + '@' + m.col), ['May@0', 'Jun@4', 'Jul@9', 'Aug@13', 'Sep@18'], 'local-ai the months sit under their first week')
 assertDeepEqual(home.rows[0].type, 'run', 'local-ai a first run, with no answers yet, has no lifetime line')
 
 // Opening a free GPU: run it, or its Config; groups are their own rows, whose Config is the group's page
