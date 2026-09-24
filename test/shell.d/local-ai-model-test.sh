@@ -49,6 +49,7 @@ const may4 = new Date(2026, 4, 4).getTime() / 1000, days = Array(140).fill(0); d
 const lived = model.build(Object.assign({}, snap, { life: { requests: 1204, since: 'May 7', start: may4, today: 12, days } }), { view: 'home' }).rows
 assertDeepEqual([lived[0].type, lived[0].tokens, lived[0].requests, lived[0].since, lived[1].type], ['life', '4.2M tokens', '1.2K requests', 'since May 7', 'run'], 'local-ai home leads with your lifetime, tokens and requests, above the running models')
 assertDeepEqual([lived[0].cells.length, lived[0].cells[3], lived[0].cells[10], lived[0].cells[11], lived[0].cells[13]], [140, 1, 4, 0, -1], 'local-ai each day is shaded against your busiest, and days to come are blank')
+assertDeepEqual([lived[0].labels[3], lived[0].labels[11]], ['Thu May 7  50 tokens', 'Fri May 15  no tokens'], 'local-ai a hovered day says its date and tokens')
 assertDeepEqual(lived[0].months.map(m => m.label + '@' + m.col), ['May@0', 'Jun@4', 'Jul@9', 'Aug@13', 'Sep@18'], 'local-ai the months sit under their first week')
 assertDeepEqual(home.rows[0].type, 'run', 'local-ai a first run, with no answers yet, has no lifetime line')
 
