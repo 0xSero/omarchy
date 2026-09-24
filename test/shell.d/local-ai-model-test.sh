@@ -40,16 +40,19 @@ const snap = {
 }
 const home = model.build(snap, { view: 'home' })
 assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'slot', 'slot', 'slot', 'slot'], 'local-ai home lists working models, then one row per GPU')
-assertDeepEqual(home.rows.slice(2).map(r => r.label), ['Arc Pro B70 #1', 'Arc Pro B70 #2', 'RTX 3090', 'Radeon RX 6600'], 'local-ai cards are numbered only when there are several of a kind')
-assertEqual(home.rows[2].note, 'running Qwen3.8-27B', 'local-ai a GPU running a model says so')
-assertDeepEqual([home.rows[3].hint, home.rows[3].open, home.rows[3].run.action], ['set up ›', 'kind|arc|a1', 'run|q|a1'], 'local-ai a free GPU can be set up or run on directly')
+assertDeepEqual(home.rows.slice(2).map(r => [r.label, r.rank]), [['Arc Pro B70', 0], ['Arc Pro B70', 1], ['RTX 3090', 3], ['Radeon RX 6600', 4]], 'local-ai free GPUs come first, then running, held and unsupported ones, unnumbered')
+assertEqual(home.rows[2].run.action, 'run|q|a1', 'local-ai a free GPU runs its model in one click')
+assertEqual(home.rows[3].note, 'running Qwen3.8-27B', 'local-ai a GPU running a model says so')
 assert(home.rows[4].warn && !home.rows[5].warn, 'local-ai only a card held by another program is a warning')
-assertEqual(home.rows[5].note, 'no validated model yet', 'local-ai a card with no model says so')
 assertDeepEqual([home.stat, home.statLabel], ['4.2M', 'all time'], 'local-ai home shows all-time tokens as value and label')
 
-// A crashed model is its GPU's row: run it again or dismiss it
+// Clicking a GPU's row opens a line under it with the rest of what can be done with it
+const opened = model.build(snap, { view: 'home', open: 'gpu:a1' }).rows
+assertDeepEqual([opened[3].type, opened[3].items.map(a => a.action)], ['links', ['run|q|a1', 'kind|arc|a1']], 'local-ai a free GPU opens to run or choose agent and folder')
+
+// A crashed model is its GPU's row: run it again in one click, or open it for the reason, the log and dismiss
 const crashed = Object.assign({}, snap, { deployments: [Object.assign({}, snap.deployments[0], { id: 'x', state: 'error', error: 'the engine stopped' })] })
-const rows = model.build(crashed, { view: 'home' }).rows
-assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'slot', 'slot'], 'local-ai a crashed model is not a card')
-assertDeepEqual([rows[1].hint, rows[1].crashed, rows[1].acts.map(a => a.action)], ['crashed', true, ['again|x|a0', 'stop|x']], 'local-ai a crashed GPU runs again or dismisses (stops) it')
+const rows = model.build(crashed, { view: 'home', open: 'gpu:a0' }).rows
+assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'links', 'slot', 'slot'], 'local-ai a crashed model is not a card')
+assertDeepEqual([rows[2].crashed, rows[2].run.action, rows[3].note, rows[3].items.map(a => a.action)], [true, 'again|x|a0', 'the engine stopped', ['again|x|a0', 'log', 'stop|x']], 'local-ai a crashed GPU runs again, shows why, or is dismissed (stopped)')
 JS
