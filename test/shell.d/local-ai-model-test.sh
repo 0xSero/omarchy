@@ -60,5 +60,6 @@ assertDeepEqual([held[5].type, held[5].note, held[5].items.map(a => a.label + ' 
 const crashed = Object.assign({}, snap, { deployments: [Object.assign({}, snap.deployments[0], { id: 'x', state: 'error', error: 'the engine stopped' })] })
 const rows = model.build(crashed, { view: 'home', open: 'gpu:a0' }).rows
 assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'slot', 'links', 'field'], 'local-ai a crashed model is a row after the free ones')
+assertDeepEqual(rows[3].dismiss, 'stop|x', 'local-ai a crashed GPU is dismissed from its row in one click')
 assertDeepEqual([rows[3].crashed, rows[3].run.action, rows[4].note, rows[4].items.map(a => a.action)], [true, 'again|x|a0', '32 GB\nthe engine stopped', ['again|x|a0', 'log', 'more|x', 'stop|x']], 'local-ai a crashed GPU runs again, shows why, opens its Config, or is dismissed (stopped)')
 JS
