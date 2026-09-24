@@ -43,4 +43,10 @@ assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'free', 'busy', 'busy
 assertEqual(home.rows[2].label, '1 × Arc Pro B70', 'local-ai free card row names the card only')
 assert(home.rows[3].warn && !home.rows[4].warn, 'local-ai only a card held by another program is a warning')
 assertDeepEqual([home.stat, home.statLabel], ['925.2K', 'this week'], 'local-ai home splits the week into value and label')
+
+// A crashed model is one row at the bottom, below the working models and the other cards, to run again or dismiss
+const crashed = Object.assign({}, snap, { deployments: [Object.assign({}, snap.deployments[0], { id: 'x', state: 'error', error: 'the engine stopped' }), snap.deployments[0]] })
+const rows = model.build(crashed, { view: 'home' }).rows
+assertDeepEqual(rows.map(r => r.type), ['run', 'sec', 'free', 'busy', 'busy', 'down'], 'local-ai home puts a crashed model last, below the working ones')
+assertDeepEqual([rows[5].label, rows[5].again, rows[5].dismiss], ['1 × Arc Pro B70 · crashed', 'again|x|a0', 'stop|x'], 'local-ai a crashed row runs again or dismisses (stops) it')
 JS
