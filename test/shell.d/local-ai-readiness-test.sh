@@ -45,3 +45,10 @@ rc=$?
 set -e
 [[ $rc != 0 && $(cat "$TMP/error") == "the model returned no answer" && $(tail -1 "$TMP/phases") == stop ]]
 pass "local-ai an empty completion fails readiness and stops the containers"
+
+# Reuse the backend matcher against the bundled recipe instead of restating its rules.
+eval "$(sed -n '/^MATCH=/,/^$/p' "$ROOT/bin/omarchy-local-ai")"
+jq -ne --slurpfile rec "$ROOT/shell/plugins/panels/local-ai/recipes.json" "$MATCH"'
+  [{backend:"amd-rocm",index:0,product:"AMD Radeon RX 9070 XT",totalMiB:16368}]
+  | match($rec[0]) | .[0].hw == "rx-9070-xt-16gb"' >/dev/null
+pass "local-ai AMD detection matches bundled Vulkan recipes"
