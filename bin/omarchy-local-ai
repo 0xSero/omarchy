@@ -268,6 +268,16 @@ fetch() {
   local id=$1 repo rev files layout d rows total done=0 path sz sha src pid have
   IFS='|' read -r repo rev files layout _ _ d < <(wpaths "$2")
   [[ ! -f $d/.verified ]] || return 0
+  # one download per weights folder: a second model on the same weights (the same model on another card) waits for
+  # the first, then finds them checked; two curls appending to one .part corrupt it
+  (umask 022 && mkdir -p "$(dirname "${d%/}")")
+  exec 7>"${d%/}.lock"
+  until flock -n 7; do
+    status "$id" download "waiting for the other download of these weights" 0
+    [[ ! -f $(dir_of "$id")/cancel ]] || exit 0
+    sleep 2
+  done
+  [[ ! -f $d/.verified ]] || { exec 7>&-; return 0; }
   rows=$(tree "$repo" "$rev" "$files") || die "Hugging Face did not list $repo (rate limit or no network): try again in a minute"
   total=$(awk -F'\t' '{s += $2} END {print s + 0}' <<<"$rows")
   (umask 022 && mkdir -p "$d")
@@ -306,6 +316,7 @@ fetch() {
     (umask 022 && mkdir -p "$d/../../refs" && echo -n "$rev" >"$d/../../refs/main")
   fi
   (umask 022 && : >"$d/.verified")
+  exec 7>&-
 }
 
 # The packaged command, root-owned all the way up, or nothing: pkexec runs whatever it is handed.
@@ -933,7 +944,7 @@ session() {
 
 # what the widget needs of a recipe
 SUMMARY='def summary($h): {id, name, family, cards: (.cards // 1), format, sizeGb, ctx: .serving.ctxTokens, caps: .capabilities,
-  weights: [.weights[]? | {repository, revision}], unfit: unfit($h)};'
+  needs, weights: [.weights[]? | {repository, revision}], unfit: unfit($h)};'
 
 cmd_snapshot() {
   local deps=() d id port at st pid obj why rc code ts="" sa="" sf="" sfs="" v="" a
