@@ -26,7 +26,8 @@ else
 fi
 CATALOG=/var/cache/omarchy-local-ai/recipes.json
 RECIPES=$PANEL/recipes.json
-[[ ! -f $CATALOG ]] || RECIPES=$CATALOG
+# a refreshed catalog wins until Omarchy is updated: an update brings recipes newer than any earlier refresh
+[[ ! $CATALOG -nt $RECIPES ]] || RECIPES=$CATALOG
 TARGET=/usr/bin/omarchy-local-ai
 LABEL=io.omarchy.local-ai
 AGENTS=(pi claude codex opencode omp crush grok copilot hermes)
