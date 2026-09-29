@@ -9,6 +9,8 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 PANEL_DIR=$TMP/omarchy/shell/plugins/panels/local-ai
 export HOME=$TMP/home XDG_RUNTIME_DIR=$TMP/run MEMINFO=$TMP/meminfo OMARCHY_PATH=$TMP/omarchy
+# the host's own Docker is out of reach, so its containers do not mark these test cards busy
+export OMARCHY_DOCKER_SOCKET=$TMP/no-docker.sock
 mkdir -p "$HOME" "$TMP/bin" "$PANEL_DIR"
 echo '{"version": "test"}' >"$PANEL_DIR/manifest.json"
 CLI=$TMP/omarchy-local-ai
