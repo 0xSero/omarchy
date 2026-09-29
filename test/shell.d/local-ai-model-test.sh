@@ -41,16 +41,16 @@ const snap = {
   deployments: [{ id: 'd', name: 'Qwen3.8-27B', keys: ['a0'], state: 'ready', agent: 'pi', session: { all: { tokens: 10 } } }],
 }
 const home = model.build(snap, { view: 'home' })
-assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'slot', 'slot', 'slot', 'field'], 'local-ai home: running cards, then available GPUs and groups, then all GPUs')
+assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'slot', 'slot', 'slot', 'field', 'acts'], 'local-ai home: running cards, then available GPUs and groups, then all GPUs')
 assertDeepEqual(home.rows.slice(2, 4).map(r => [r.label, r.run.action]), [['Arc Pro B70', 'run|q|a1'], ['Arc Pro B70', 'run|q|a2']], 'local-ai only free GPUs are listed, each running its model in one click')
 assertDeepEqual([home.rows[4].label, home.rows[4].run.action], ['2 × Arc Pro B70', 'run|q2|a1,a2'], 'local-ai two free cards of a kind are also offered as a group, its own row')
 assertDeepEqual([home.rows[5].label, home.rows[5].value, home.rows[5].action], ['all GPUs', '5', 'gpus'], 'local-ai the rest of the GPUs are one link away')
 const may4 = new Date(2026, 4, 4).getTime() / 1000, days = Array(140).fill(0); days[3] = 50; days[10] = 200
 const lived = model.build(Object.assign({}, snap, { life: { requests: 1204, since: 'May 7', start: may4, today: 12, days } }), { view: 'home' }).rows
 assertDeepEqual([lived[0].type, lived[0].tokens, lived[0].requests, lived[0].since, lived[1].type], ['life', '4.2M tokens', '1.2K requests', 'since May 7', 'run'], 'local-ai home leads with your lifetime, tokens and requests, above the running models')
-assertDeepEqual([lived[0].cells.length, lived[0].cells[3], lived[0].cells[10], lived[0].cells[11], lived[0].cells[13]], [140, 1, 4, 0, -1], 'local-ai each day is shaded against your busiest, and days to come are blank')
+assertDeepEqual([lived[0].cells.length, lived[0].cells[3], lived[0].cells[10], lived[0].cells[11], lived[0].cells[13]], [13, 1, 4, 0, undefined], 'local-ai each day is shaded against your busiest, and days to come are omitted')
 assertDeepEqual([lived[0].labels[3], lived[0].labels[11]], ['Thu May 7  50 tokens', 'Fri May 15  no tokens'], 'local-ai a hovered day says its date and tokens')
-assertDeepEqual(lived[0].months.map(m => m.label + '@' + m.col), ['May@0', 'Jun@4', 'Jul@9', 'Aug@13', 'Sep@18'], 'local-ai the months sit under their first week')
+assertDeepEqual(lived[0].months.map(m => m.label + '@' + m.col), ['May@0'], 'local-ai the months sit under their first week')
 assertDeepEqual(home.rows[0].type, 'run', 'local-ai a first run, with no answers yet, has no lifetime line')
 
 // Opening a free GPU: run it, or its Config; groups are their own rows, whose Config is the group's page
@@ -84,7 +84,7 @@ assertDeepEqual([chose.hero.name, chose.rows.filter(r => r.type === 'opt' && r.o
 // A crashed model is an available GPU's row: run it again in one click, or open it for the reason, the log and dismiss
 const crashed = Object.assign({}, snap, { deployments: [Object.assign({}, snap.deployments[0], { id: 'x', state: 'error', error: 'the engine stopped' })] })
 const rows = model.build(crashed, { view: 'home', open: 'gpu:a0' }).rows
-assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'slot', 'slot', 'links', 'field'], 'local-ai a crashed model is a row after the free ones and groups')
+assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'slot', 'slot', 'links', 'field', 'acts'], 'local-ai a crashed model is a row after the free ones and groups')
 assertDeepEqual(rows[4].dismiss, 'stop|x', 'local-ai a crashed GPU is dismissed from its row in one click')
 assertDeepEqual([rows[4].crashed, rows[4].run.action, rows[5].note, rows[5].items.map(a => a.action)], [true, 'again|x|a0', 'the engine stopped', ['again|x|a0', 'log', 'more|x']], 'local-ai a crashed GPU runs again, shows why, shows its logs or opens its Config')
 JS
