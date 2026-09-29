@@ -108,12 +108,12 @@ function slot(s, ui, g, at) {
   } else if (d && d.state === "error") {
     row.rank = 2
     row.crashed = true
-    row.hint = "crashed"
+    row.hint = "stopped"
     row.run = { label: "run again ›", action: "again|" + d.id + "|" + d.keys.join(",") }
     row.dismiss = "stop|" + d.id
     note = d.error || "stopped"
-    // dismiss is on the row itself
-    items = [{ label: "Run again ›", action: row.run.action, primary: true }, { label: "View logs", action: "log" }, config]
+    // run again and dismiss are on the row itself
+    items = [{ label: "View logs", action: "log" }, config]
   } else if (d) {
     row.rank = 1
     row.note = (d.state === "ready" ? "running " : d.state === "stopping" ? "stopping " : "starting ") + d.name
