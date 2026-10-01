@@ -466,6 +466,13 @@ phase_start() {
       a+=(--device "$v")
     done
     a+=(--volume "$run/by-path:/dev/dri/by-path:ro")
+    # Intel's runtime lets the copy engine read ordinary host memory in place while the weights load. On a B70 with
+    # less RAM than the checkpoint that range is unmapped mid-transfer (xe: "Fault response: Unsuccessful -ENOENT",
+    # copy engine reset) and vLLM waits on the lost copy. Staging through the runtime's own buffers is not enough:
+    # the engine still registers the mapped file as shared-system memory, so shared-system USM is off as well.
+    if [[ $backend == "intel-xpu" ]]; then
+      a+=(--env NEOReadDebugKeys=1 --env TreatNonUsmForTransfersAsSharedSystem=0 --env EnableSharedSystemUsmSupport=0)
+    fi
   fi
   while IFS='|' read -r _ _ _ _ v w _; do
     owned "$w"
@@ -612,7 +619,8 @@ worker_run() {
     -d "$(jq -nc --arg m "$served" '{model: $m, max_tokens: 200, messages: [{role: "user", content: "Count from 1 to 60. Nothing else."}]}')") ||
     fail "the model did not answer"
   # A cold first request can include compilation or queueing, so its wall time is not GPU decode speed.
-  jq -e '.choices[0].message | any(.content, .reasoning_content; type == "string" and length > 0)' <<<"$reply" >/dev/null ||
+  # vLLM puts thinking in `reasoning`, older engines in `reasoning_content`; 200 tokens can all be thinking
+  jq -e '.choices[0].message | any(.content, .reasoning, .reasoning_content; type == "string" and length > 0)' <<<"$reply" >/dev/null ||
     fail "the model returned no answer"
   echo $((SECONDS - t0)) >"$took"
   status "$WID" ready "" 100

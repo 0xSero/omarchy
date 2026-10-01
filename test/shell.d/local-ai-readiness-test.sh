@@ -37,6 +37,11 @@ REPLY_FIXTURE='{"choices":[{"message":{"content":"1, 2, 3"}}],"usage":{"completi
 (worker_run test nvidia:0)
 [[ $(cat "$TMP/state") == ready && $(cat "$TMP/phases") == start ]]
 pass "local-ai a cold successful completion reaches ready without a throughput gate"
+REPLY_FIXTURE='{"choices":[{"message":{"content":null,"reasoning":"The user wants 1 to 60."},"finish_reason":"length"}],"usage":{"completion_tokens":200}}'
+echo starting >"$TMP/state"
+(worker_run test nvidia:0)
+[[ $(cat "$TMP/state") == ready && $(tail -1 "$TMP/phases") == start ]]
+pass "local-ai an answer that is all thinking, in vLLM's reasoning field, counts as an answer"
 REPLY_FIXTURE='{}'
 # Preserve errexit inside the subshell rather than putting the worker in an if condition.
 set +e
