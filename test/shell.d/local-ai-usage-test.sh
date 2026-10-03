@@ -30,15 +30,21 @@ rm -f "$D/summary.json"
 line 1 | awk '{for(i=0;i<200005;i++)print}' >"$D/usage.jsonl"
 check "200005 2200055" "large logs cross the 100000-line boundary without SIGPIPE"
 # UTC-hour buckets overlap local midnight in half-hour and quarter-hour zones.
-# Keep the boundary bucket in both totals, matching session's hour precision.
+# Only requests after local midnight belong in the weekly total, even within the same UTC hour.
 for zone in Asia/Kolkata Asia/Kathmandu; do
   export TZ=$zone
   boundary=$(date -d '6 days ago 00:05' +%s)
   printf '{"t":%d,"prompt":77,"completion":3,"ms":500,"ttft_ms":50}\n' "$boundary" >"$D/usage.jsonl"
+  printf '{"t":%d,"prompt":997,"completion":3,"ms":500,"ttft_ms":50}\n' "$((boundary - 600))" >>"$D/usage.jsonl"
   rm -f "$D/summary.json"
   week=$(bash -c "source '$FNS'; STATE='$T'; session m '$EPOCHSECONDS'" | jq -r .week)
   total=$(bash -c "source '$FNS'; STATE='$T'; tokens" | jq -r .week)
   [[ $week == 80 && $total == 80 ]] || { echo "not ok - midnight bucket $zone: model=$week total=$total"; exit 1; }
 done
-echo 'ok - weekly boundary includes half-hour and quarter-hour midnight buckets'
+echo 'ok - weekly boundary excludes requests before half-hour and quarter-hour midnight'
+# Changing timezones rebuilds the cached local-day counts.
+export TZ=UTC
+week=$(bash -c "source '$FNS'; STATE='$T'; session m '$EPOCHSECONDS'" | jq -r .week)
+[[ $week == 0 ]] || { echo "not ok - timezone change: $week"; exit 1; }
+echo 'ok - timezone change rebuilds local-day counts'
 rm -rf "$T" "$FNS"
