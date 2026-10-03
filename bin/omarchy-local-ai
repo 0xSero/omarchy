@@ -394,7 +394,12 @@ owned() {
     die "the model files must be owned by you and cannot be symbolic links"
 }
 
-network() { printf 'omarchy-local-ai-%s-%s' "${PKEXEC_UID:-$(id -u)}" "$1"; }
+network() {
+  local uid
+  uid=$(jq -r '.containerUid // empty' "$(dir_of "$1")/config.json" 2>/dev/null) || uid=""
+  [[ -z $uid || $uid == "${PKEXEC_UID:-$(id -u)}" ]] || die "invalid container owner"
+  printf 'omarchy-local-ai-%s%s' "${uid:+$uid-}" "$1"
+}
 engine() { printf '%s-engine' "$(network "$1")"; }
 gateway() { printf '%s-gateway' "$(network "$1")"; }
 ours() { [[ $(docker inspect -f "{{index .Config.Labels \"$LABEL.uid\"}}" "$1" 2>/dev/null) == "${PKEXEC_UID:-$(id -u)}" ]]; }
@@ -417,8 +422,18 @@ remove() {
   rm -rf -- "$(rundir "$1")"
 }
 
+# All users share the allocation lock. Read-only descriptors can lock the same file, so later users need no
+# write access. Exclusive creation never follows a symlink or truncates an existing file; closing releases it.
+allocation_lock() {
+  local lock=/tmp/omarchy-local-ai-allocation.lock
+  (umask 022; set -o noclobber; : >"$lock") 2>/dev/null || true
+  [[ -f $lock && ! -L $lock ]] || die "invalid model allocation lock"
+  exec 8<"$lock"
+  flock -w 30 8 || die "another model is starting; try again"
+}
+
 # phase_start <id> <port> <key>: re-read the recipe here, check every path, build both containers
-phase_start() {
+phase_start() (
   valid_id "$1" && [[ $2 =~ ^[0-9]+$ && $2 -ge 12434 && $2 -lt 12450 ]] || die "invalid request"
   local id=$1 port=$2 r g backend run a=() k v w
   shift 2
@@ -446,6 +461,7 @@ phase_start() {
     docker image inspect "$v" >/dev/null 2>&1 || docker pull -q "$v" >&2 || die "could not pull $v"
   done
 
+  allocation_lock
   remove "$id"
   # Recheck after downloads with the privileged launcher's view of every container's allocations.
   g=$(gpus)
@@ -512,12 +528,18 @@ phase_start() {
     remove "$id"
     die "the gateway did not start"
   fi
-}
+)
 
 phase_stop() {
   valid_id "$1" || die "invalid request"
   docker info >/dev/null 2>&1 || die "Docker is not responding; try again when it is running"
-  remove "$1"
+  if [[ ${2:-} == engine ]]; then
+    # Keep the gateway as ownership and port evidence until privileged unsharing succeeds.
+    if ours "$(engine "$1")"; then docker rm -f "$(engine "$1")" >/dev/null; fi
+  else
+    [[ -z ${2:-} ]] || die "invalid stop request"
+    remove "$1"
+  fi
 }
 
 # serve <port> on|off
@@ -673,8 +695,8 @@ cmd_run() {
   ((port < 12450)) || die "no free port between 12434 and 12449"
   mkdir -p "$d"
   rm -f "$d/err" "$d/cancel"
-  jq -nc --arg id "$id" --argjson p "$port" --arg a "$(get agent)" --arg f "$(get folder)" --arg t "$(now)" \
-    '{id: $id, keys: $ARGS.positional, port: $p, agent: $a, folder: $f, startedAt: $t}' --args "${keys[@]}" >"$d/config.json.tmp"
+  jq -nc --arg id "$id" --argjson uid "$(id -u)" --argjson p "$port" --arg a "$(get agent)" --arg f "$(get folder)" --arg t "$(now)" \
+    '{id: $id, containerUid: $uid, keys: $ARGS.positional, port: $p, agent: $a, folder: $f, startedAt: $t}' --args "${keys[@]}" >"$d/config.json.tmp"
   mv -f "$d/config.json.tmp" "$d/config.json"
   flock -u 9
 
@@ -706,7 +728,7 @@ cmd_stop() {
   if [[ $(jq -r '.shared // false' "$d/config.json" 2>/dev/null) == "true" ]]; then
     (cmd_share "$1" off) || unshared=false
   fi
-  if ! elevate stop "$1"; then
+  if ! elevate stop "$1" "$([[ $unshared == false ]] && echo engine)"; then
     status "$1" error "" 0 "could not stop it; try again"
     return 1
   fi
