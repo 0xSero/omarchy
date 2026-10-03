@@ -29,4 +29,16 @@ echo 'ok - weekly tokens belong to this model'
 rm -f "$D/summary.json"
 line 1 | awk '{for(i=0;i<200005;i++)print}' >"$D/usage.jsonl"
 check "200005 2200055" "large logs cross the 100000-line boundary without SIGPIPE"
+# UTC-hour buckets overlap local midnight in half-hour and quarter-hour zones.
+# Keep the boundary bucket in both totals, matching session's hour precision.
+for zone in Asia/Kolkata Asia/Kathmandu; do
+  export TZ=$zone
+  boundary=$(date -d '6 days ago 00:05' +%s)
+  printf '{"t":%d,"prompt":77,"completion":3,"ms":500,"ttft_ms":50}\n' "$boundary" >"$D/usage.jsonl"
+  rm -f "$D/summary.json"
+  week=$(bash -c "source '$FNS'; STATE='$T'; session m '$EPOCHSECONDS'" | jq -r .week)
+  total=$(bash -c "source '$FNS'; STATE='$T'; tokens" | jq -r .week)
+  [[ $week == 80 && $total == 80 ]] || { echo "not ok - midnight bucket $zone: model=$week total=$total"; exit 1; }
+done
+echo 'ok - weekly boundary includes half-hour and quarter-hour midnight buckets'
 rm -rf "$T" "$FNS"
