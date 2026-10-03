@@ -7,6 +7,8 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 sed '/^paths "\$HOME"$/,$d' "${BACKEND:-$ROOT/bin/omarchy-local-ai}" >"$TMP/functions"
 source "$TMP/functions"
+ALLOCATION_LOCK=$TMP/docker.pid
+: >"$ALLOCATION_LOCK"
 paths "$TMP/home"
 mkdir -p "$STATE/deploy/test"
 echo '{}' >"$STATE/deploy/test/config.json"
@@ -56,6 +58,8 @@ echo 'ok - failed unsharing retains the stopped port until a successful retry'
 
 # A failed privileged unshare retries against the retained gateway, not user-supplied port state.
 source "$TMP/functions"
+ALLOCATION_LOCK=$TMP/docker.pid
+: >"$ALLOCATION_LOCK"
 paths "$TMP/home"
 mkdir -p "$STATE/deploy/test"
 echo '{"port":12434,"shared":true}' >"$STATE/deploy/test/config.json"
@@ -82,6 +86,8 @@ echo 'ok - privileged Stop retry keeps gateway ownership and port evidence until
 
 # Separate users have separate state locks, but must serialize the shared GPU check and creation.
 source "$TMP/functions"
+ALLOCATION_LOCK=$TMP/docker.pid
+: >"$ALLOCATION_LOCK"
 paths "$TMP/home"
 RECIPES=$TMP/recipes.json
 recipe() { echo '{"hw":"test","cards":1,"image":"engine","weights":[],"launch":{"port":8080,"environment":{},"arguments":[]}}'; }

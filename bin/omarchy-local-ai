@@ -30,6 +30,7 @@ RECIPES=$PANEL/recipes.json
 [[ ! $CATALOG -nt $RECIPES ]] || RECIPES=$CATALOG
 TARGET=/usr/bin/omarchy-local-ai
 LABEL=io.omarchy.local-ai
+ALLOCATION_LOCK=/run/docker.pid
 AGENTS=(pi claude codex opencode omp crush grok copilot hermes)
 umask 077
 
@@ -422,13 +423,11 @@ remove() {
   rm -rf -- "$(rundir "$1")"
 }
 
-# All users share the allocation lock. Read-only descriptors can lock the same file, so later users need no
-# write access. Exclusive creation never follows a symlink or truncates an existing file; closing releases it.
+# Lock the daemon's existing root-owned PID file read-only: every Docker user sees the same inode,
+# and no user-created temporary file can block another account through its permissions.
 allocation_lock() {
-  local lock=/tmp/omarchy-local-ai-allocation.lock
-  (umask 022; set -o noclobber; : >"$lock") 2>/dev/null || true
-  [[ -f $lock && ! -L $lock ]] || die "invalid model allocation lock"
-  exec 8<"$lock"
+  [[ -r $ALLOCATION_LOCK ]] || die "Docker's PID file is unavailable; check that Docker is running"
+  exec 8<"$ALLOCATION_LOCK"
   flock -w 30 8 || die "another model is starting; try again"
 }
 
