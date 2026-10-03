@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # omarchy:summary=Run the model validated for your GPU and open a coding agent on it
-# omarchy:args=registry | forget <recipe> | snapshot | run <recipe> <gpu>[,<gpu>...] | stop <recipe> | open <recipe> | set agent|folder <value> [recipe] | share <recipe> [off] | log | remove
+# omarchy:args=registry | forget <recipe> | snapshot | run <recipe> <gpu>[,<gpu>...] | stop <recipe> | open <recipe> | update <agent> | set agent|folder <value> [recipe] | share <recipe> [off] | log | remove
 # omarchy:hidden=true
 
 # The backend of the Local AI bar widget. One running model is one folder, $STATE/deploy/<recipe>:
@@ -30,7 +30,7 @@ RECIPES=$PANEL/recipes.json
 [[ ! $CATALOG -nt $RECIPES ]] || RECIPES=$CATALOG
 TARGET=/usr/bin/omarchy-local-ai
 LABEL=io.omarchy.local-ai
-ALLOCATION_LOCK=/run/docker.pid
+ALLOCATION_LOCK=/run
 AGENTS=(pi claude codex opencode omp crush grok copilot hermes)
 umask 077
 
@@ -50,7 +50,7 @@ die() { printf 'local-ai: %s\n' "$*" >&2; exit 1; }
 docker() { timeout --kill-after=5 "$( [[ ${1:-} == pull ]] && echo 1800 || echo 30 )" docker "$@"; }
 notify() { omarchy-notification-send --app-name "Local AI" "$@" 2>/dev/null || echo 0; }
 valid_id() { [[ $1 =~ ^[a-z0-9][a-z0-9.-]{0,63}$ ]]; }
-valid_key() { [[ $1 =~ ^(nvidia|intel-xpu|amd-rocm):[0-9]{1,2}$ ]]; }
+valid_key() { [[ $1 =~ ^(nvidia|intel-xpu|amd-rocm):[0-9]{1,2}$ || $1 == cpu:0 ]]; }
 dir_of() { printf '%s/deploy/%s' "$STATE" "$1"; }
 
 # status <id> <state> [detail] [percent] [error]: what the widget shows; the log gets each new step once
@@ -75,6 +75,9 @@ recipe() {
 policy() {
   jq -er --slurpfile all "${2:-$RECIPES}" '
     def name: test("^([A-Za-z0-9_-][A-Za-z0-9_.-]*)?$");
+    # a comma-separated list of names or relative paths; no traversal
+    def names: test("^(([A-Za-z0-9_-][A-Za-z0-9_./-]*)(,([A-Za-z0-9_-][A-Za-z0-9_./-]*))*)?$")
+               and (contains("..") | not);
     def abs: test("^/[A-Za-z0-9_./-]+$") and (contains("..") | not);
     if (.image | test("^[a-z0-9./_:-]+@sha256:[0-9a-f]{64}$") | not) then "image is not pinned by digest"
     elif ($all[0].gateway.image | test("^[a-z0-9./_:-]+@sha256:[0-9a-f]{64}$") | not) then "gateway is not pinned by digest"
@@ -82,7 +85,7 @@ policy() {
     elif ([.weights[]? | select(
         (.repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not) or (.revision | test("^[0-9a-f]{40}$") | not)
         or (.layout != "dir" and .layout != "hub") or (.mountPath | abs | not)
-        or (.dir // "" | name | not) or (.files // "" | name | not))] | length) > 0 then "invalid weights"
+        or (.dir // "" | name | not) or (.files // "" | names | not))] | length) > 0 then "invalid weights"
     elif (.asset != null and ((.asset.name | test("^[A-Za-z0-9_-][A-Za-z0-9_.-]*$") | not) or (.asset.mountPath | abs | not))) then "invalid asset"
     elif ((.launch.port | type) != "number") then "invalid port"
     elif ([.launch.environment | keys[]? | select(test("^[A-Z_][A-Z0-9_]*$") | not)] | length) > 0 then "invalid environment"
@@ -166,14 +169,26 @@ intel() {
 
 # amd-smi comes with ROCm; without it AMD cards are not listed and the widget says Coming soon.
 amd() {
-  omarchy-cmd-present amd-smi || { echo '[]'; return; }
-  jq -nc --argjson s "$(timeout 10 amd-smi static --json 2>/dev/null || echo '{}')" \
-    --argjson m "$(timeout 10 amd-smi metric --mem-usage --temperature --json 2>/dev/null || echo '{}')" '
+  # ROCm installs amd-smi in /opt/rocm/bin, which a session started before the
+  # install does not have on PATH.
+  local amdsmi
+  amdsmi=$(command -v amd-smi || echo /opt/rocm/bin/amd-smi)
+  [[ -x $amdsmi ]] || { echo '[]'; return; }
+  jq -nc --argjson s "$(timeout 10 "$amdsmi" static --json 2>/dev/null || echo '{}')" \
+    --argjson m "$(timeout 10 "$amdsmi" metric --mem-usage --temperature --json 2>/dev/null || echo '{}')" '
     [($s.gpu_data // [])[] | . as $g | ([($m.gpu_data // [])[] | select(.gpu == $g.gpu)][0] // {}) as $u
      | select(($g.asic.market_name // "") != "")
      | {backend: "amd-rocm", index: ($g.gpu | tonumber), product: $g.asic.market_name, totalMiB: ($g.vram.size.value // 0),
         usedMiB: ($u.mem_usage.used_vram.value // null), tempC: ($u.temperature.edge.value // null),
         node: ("/dev/dri/by-path/pci-" + ($g.bus.bdf // "") + "-render")}]' 2>/dev/null || echo '[]'
+}
+
+cpu() {
+  if [[ $(uname -m) == x86_64 ]] && grep -qw avx2 "${CPUINFO:-/proc/cpuinfo}" &&
+    jq -e 'any(.hardware[]; .match.backend == "cpu" and (.match.names | index("x8664avx2cpu") != null))' "$RECIPES" >/dev/null; then
+    jq -nc --argjson ram "$(awk '/^MemTotal:/{print int($2 * 1024 / 1e9)}' "${MEMINFO:-/proc/meminfo}")" \
+      '[{backend:"cpu",index:0,product:"x86-64 AVX2 CPU",totalMiB:0,usedMiB:null,tempC:null,ramGb:$ram}]'
+  else echo '[]'; fi
 }
 
 # gpus($nvidia; $intel; $amd): the three listings as one; match($recipes): each GPU with the card kind the recipes know
@@ -184,11 +199,17 @@ MATCH='def gpus($nv; $xe; $am): ($nv | split("\n") | map(select(length > 0) | sp
       product: "Intel Arc Pro B70", totalMiB: 32768, usedMiB: null, tempC: (.value[0] | tonumber? // null), node: .value[1]}))
     + $am;
   def norm: ascii_downcase | gsub("nvidia|geforce|intel|amd|radeon|generation|workstation|edition|[0-9]+gb|[^a-z0-9]"; "");
-  def match($r): [.[] | . as $x
+  def match($r; $ram): [.[] | . as $x
     | ([$r.hardware | to_entries[] | select((.value.match.backend | sub("amd-vulkan"; "amd-rocm")) == $x.backend
         and (.value.match.names | index($x.product | norm)) != null
-        and (((.value.match.vramGb * 1024) - $x.totalMiB) | fabs) <= 1024) | .key][0] // "") as $hw
-    | $x + {key: ($x.backend + ":" + ($x.index | tostring)), hw: $hw, vramGb: (($x.totalMiB / 1024) | round),
+        # a unified-memory APU reports only its BIOS carve-out as VRAM, so the card is judged by host
+        # RAM covering its stated memory once the carve-out (up to 8 GiB) is added back
+        and (if .value.match.unifiedMemory // false then ($ram + 8192) >= .value.match.vramGb * 1024
+          else (((.value.match.vramGb * 1024) - $x.totalMiB) | fabs) <= 1024 end)) | .key][0] // "") as $hw
+    | ($hw != "" and ($r.hardware[$hw].match.unifiedMemory // false)) as $uni
+    | $x + {key: ($x.backend + ":" + ($x.index | tostring)), hw: $hw,
+        totalMiB: (if $uni then $ram else $x.totalMiB end), usedMiB: (if $uni then null else $x.usedMiB end),
+        vramGb: (((if $uni then $ram else $x.totalMiB end) / 1024) | round),
         name: ($x.product | gsub("^(NVIDIA GeForce |NVIDIA |Intel |AMD Radeon |AMD )"; ""))}];'
 
 # docker_ok: this process can reach the daemon (the docker group, or root in a pkexec phase)
@@ -198,7 +219,7 @@ docker_ok() { [[ -w ${OMARCHY_DOCKER_SOCKET:-/var/run/docker.sock} ]]; }
 # Unknown NVIDIA UUID/count requests reserve all NVIDIA cards; memory alone cannot detect idle allocations.
 gpus() {
   local ids claims='[]' p
-  if docker_ok; then
+  if [[ ${1:-} != none ]] && docker_ok; then
     ids=$(docker ps -q) || die "could not check Docker GPU allocations; try again"
     if [[ -n $ids ]]; then
       # Read only allocation fields, never container environments or credentials.
@@ -207,19 +228,19 @@ gpus() {
         die "could not check Docker GPU allocations; try again"
     fi
   fi
-  jq -nc --arg nv "$(nvidia)" --arg xe "$(intel)" --argjson am "$(amd)" --slurpfile rec "$RECIPES" --argjson claims "$claims" \
+  jq -nc --arg nv "$(nvidia)" --arg xe "$(intel)" --argjson am "$(amd)" --argjson cpu "$(cpu)" --argjson ram "$(awk '/^MemTotal:/ {print int($2 / 1024)}' "${MEMINFO:-/proc/meminfo}")" --slurpfile rec "$RECIPES" --argjson claims "$claims" \
     --arg links "$(for p in /dev/dri/by-path/*-render; do printf '%s\t%s\n' "$p" "$(readlink -f "$p")"; done)" "$MATCH"'
     ($links | split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: .[1]}) | from_entries) as $links
     | def node: $links[.] // .;
-    (gpus($nv; $xe; $am) | match($rec[0])) | map(. as $g
-      | (if .backend == "nvidia" then "/dev/nvidia" + (.index | tostring) else .node | node end) as $node
-      | . + {held: any($claims[];
+    (gpus($nv; $xe; $am) + $cpu | match($rec[0]; $ram)) | map(. as $g
+      | (if .backend == "cpu" then "" elif .backend == "nvidia" then "/dev/nvidia" + (.index | tostring) else .node | node end) as $node
+      | . + {held: (.backend != "cpu" and any($claims[];
           .privileged == true
           or any(.devices[]?; (.PathOnHost | node) as $p | $node == $p or ($node | startswith($p + "/")))
           or ($g.backend == "nvidia" and any(.requests[]?;
             (.Driver == "nvidia" or any(.Capabilities[]?; index("gpu") != null))
             and ((.DeviceIDs // [] | length) == 0 or any(.DeviceIDs[];
-              . == ($g.index | tostring) or (test("^[0-9]+$") | not))))))})'
+              . == ($g.index | tostring) or (test("^[0-9]+$") | not)))))))})'
 }
 
 # host: what a recipe that offloads weights to the machine needs of it besides the card (its `needs`): available RAM,
@@ -279,7 +300,9 @@ tree() {
     mv -f "$f.tmp" "$f"
   fi
   if [[ -n $files ]]; then
-    awk -F'\t' -v f="$files" '{n = $1; sub(/.*\//, "", n)} n == f || n ~ /mmproj/' "$f"
+    # files is a comma-separated list of basenames: an Engram checkpoint keeps two shards out of a large base model
+    awk -F'\t' -v f="$files" 'BEGIN{n = split(f, a, ","); for (i = 1; i <= n; i++) want[a[i]] = 1}
+      {b = $1; sub(/.*\//, "", b); if (b in want || $1 in want || b ~ /mmproj/) print}' "$f"
   else
     cat "$f"
   fi
@@ -423,10 +446,10 @@ remove() {
   rm -rf -- "$(rundir "$1")"
 }
 
-# Lock the daemon's existing root-owned PID file read-only: every Docker user sees the same inode,
+# Lock the existing root-owned runtime directory read-only: every user sees the same inode,
 # and no user-created temporary file can block another account through its permissions.
 allocation_lock() {
-  [[ -r $ALLOCATION_LOCK ]] || die "Docker's PID file is unavailable; check that Docker is running"
+  [[ -r $ALLOCATION_LOCK ]] || die "The system runtime directory is unavailable"
   exec 8<"$ALLOCATION_LOCK"
   flock -w 30 8 || die "another model is starting; try again"
 }
@@ -476,8 +499,9 @@ phase_start() (
   if [[ $backend == "nvidia" ]]; then
     v=$(printf '%s,' "${@#*:}")
     a+=(--gpus "\"device=${v%,}\"")
-  else
-    [[ $backend == "amd-rocm" ]] && a+=(--device /dev/kfd --group-add video --group-add render)
+  elif [[ $backend != cpu ]]; then
+    [[ $backend == "amd-rocm" ]] && a+=(--device /dev/kfd \
+      --group-add "$(getent group video | cut -d: -f3)" --group-add "$(getent group render | cut -d: -f3)")
     # oneCCL opens every by-path link it finds, so the engine sees only its own cards'
     for k in "$@"; do
       v=$(readlink -f "$(jq -r --arg k "$k" '.[] | select(.key == $k) | .node' <<<"$g")")
@@ -802,12 +826,13 @@ cmd_set() {
   esac
   if [[ -n ${3:-} ]]; then
     valid_id "$3" && [[ -f $(dir_of "$3")/config.json ]] || die "$3 is not running"
+    if [[ $k == agent ]]; then files=(); fi
     files+=("$(dir_of "$3")/config.json")
   fi
   for f in "${files[@]}"; do
     { cat "$f" 2>/dev/null || echo '{}'; } | jq --arg k "$k" --arg v "$v" \
-      '.[$k] = $v | if $k == "folder" then .folders = ([$v] + ((.folders // []) - [$v]))[:6] else . end' >"$f.tmp"
-    mv -f "$f.tmp" "$f"
+      '.[$k] = $v | if $k == "folder" then .folders = ([$v] + ((.folders // []) - [$v]))[:6] else . end' >"$f.$$"
+    mv -f "$f.$$" "$f"
   done
 }
 
@@ -819,6 +844,48 @@ bin() {
     omarchy-cmd-present "$1" && echo "$1"
   fi
 }
+
+cmd_update() (
+  local a=${1:-} b tool package prefix
+  printf '%s\n' "${AGENTS[@]}" | grep -qx -- "$a" || die "unknown agent"
+  b=$(bin "$a") || die "$a is not installed"
+  exec 7>"$STATE/update.lock"
+  flock -n 7 || die "an agent update is already running"
+  cd -- "$HOME_DIR"
+  tool=$a
+  case $a in
+    grok) tool=npm:@xai-official/grok ;;
+    omp) tool=github:can1357/oh-my-pi ;;
+    hermes) tool='pipx:hermes-agent[extras=all]' ;;
+  esac
+  local cmd=()
+  if omarchy-cmd-present mise && timeout 10 mise ls --installed --json "$tool" 2>/dev/null | jq -e 'length > 0' >/dev/null; then
+    cmd=(mise --yes upgrade --bump "$tool")
+    # Omarchy's Hermes launcher uses this interpreter for its native dependencies.
+    [[ $a != hermes ]] || export UV_PYTHON=3.13
+  else
+    case $a in
+      omp | hermes | claude) cmd=("$b" update) ;;
+      opencode) cmd=("$b" upgrade) ;;
+      *)
+        case $a in
+          pi) package=@mariozechner/pi-coding-agent ;;
+          codex) package=@openai/codex ;;
+          copilot) package=@github/copilot ;;
+          crush) package=@charmland/crush ;;
+          grok) package=@xai-official/grok ;;
+        esac
+        prefix=$(timeout 10 npm prefix -g 2>/dev/null) || die "update $a with the package manager that installed it"
+        [[ $(readlink -f -- "$(command -v "$b")") == "$prefix"/* ]] || die "update $a with the package manager that installed it"
+        cmd=(npm install --global "$package@latest")
+        ;;
+    esac
+  fi
+  say "updating $a"
+  timeout 840 "${cmd[@]}" >>"$LOG" 2>&1 || die "could not update $a; see the Local AI log"
+  say "updated $a"
+  printf 'Updated %s. New sessions use the updated version.\n' "$a"
+)
 
 # keyed <VAR...>: argv that exports the gateway key into those variables, read from its file, then runs the rest
 keyed() {
@@ -902,11 +969,18 @@ argv() {
 # open <id>: the model's agent in its folder, in a terminal
 cmd_open() {
   valid_id "${1:-}" || die "open <recipe>"
-  local d c r a b ag dir cmd=() v
+  local d c s a b ag dir cmd=() v launcher
   d=$(dir_of "$1")
   [[ $(jq -r .state "$d/status.json" 2>/dev/null) == "ready" ]] || die "the model is not ready"
   c=$(<"$d/config.json")
-  r=$(recipe "$1") || die "$1 is no longer a recipe here; stop it and run the one for this card"
+  # a model started before its config kept this reads it from its recipe; one whose recipe is gone since opens under
+  # its id (the gateway maps any model name onto the served one) with the context its engine reports: an agent told
+  # less than the engine holds cuts its own replies short once a conversation outgrows it
+  s=$(jq -ce '.serve // empty' <<<"$c") ||
+    s=$(recipe "$1" | jq -ce '{name, ctx: (.serving.ctxTokens // 32768), vision: (.capabilities.vision // false)}') ||
+    s=$(curl -fsS -m 5 -o /dev/stdout -H "@$AUTH" "http://127.0.0.1:$(jq -r .port <<<"$c")/v1/models" 2>/dev/null |
+      jq -ce --arg n "${1%--*}" '{name: $n, ctx: (.data[0].max_model_len // empty), vision: false}') ||
+    s=$(jq -nc --arg n "${1%--*}" '{name: $n, ctx: 32768, vision: false}')
   a=$(jq -r .agent <<<"$c")
   dir=$(jq -r .folder <<<"$c")
   b=$(bin "$a") || die "$a is not installed"
@@ -916,12 +990,20 @@ cmd_open() {
   # the gateway maps any model name onto the served one, so agents see the recipe's name
   while IFS= read -r -d '' v; do
     cmd+=("$v")
-  done < <(argv "$a" "$b" "http://127.0.0.1:$(jq -r .port <<<"$c")" "$(jq -r .name <<<"$r")" \
-    "$(jq -r '.serving.ctxTokens // 32768' <<<"$r")" "$(jq -r '.capabilities.vision // false' <<<"$r")" "$ag")
+  done < <(argv "$a" "$b" "http://127.0.0.1:$(jq -r .port <<<"$c")" "$(jq -r .name <<<"$s")" \
+    "$(jq -r .ctx <<<"$s")" "$(jq -r .vision <<<"$s")" "$ag")
   [[ $a == "omp" && $dir -ef $HOME_DIR ]] && cmd+=(--allow-home)
   say "open $a on $1 in $dir"
+  # Some terminals keep their launcher alive for the whole session. Release the panel after startup,
+  # or its action timeout would kill a healthy agent two minutes later.
   omarchy-launch-tui --app-id=org.omarchy.local-ai bash -c 'cd -- "$1" && shift && exec "$@"' local-ai "$dir" "${cmd[@]}" \
-    </dev/null >/dev/null 2>&1 || die "could not open the agent terminal; try again"
+    </dev/null >/dev/null 2>&1 &
+  launcher=$!
+  sleep 0.3
+  if ! kill -0 "$launcher" 2>/dev/null; then
+    wait "$launcher" || die "could not open the agent terminal; try again"
+  fi
+  disown "$launcher" 2>/dev/null || true
 }
 
 # share <id> [off]: tailscale serve as you when you are the tailnet's operator, else through the same prompt as a start
@@ -1105,7 +1187,7 @@ fi
 paths "$HOME"
 mkdir -p "$STATE"
 case ${1:-} in
-registry | forget | snapshot | run | stop | open | set | share) "cmd_$1" "${@:2}" ;;
+registry | forget | snapshot | run | stop | open | update | set | share) "cmd_$1" "${@:2}" ;;
 log) exec omarchy-launch-tui --app-id=org.omarchy.local-ai-log less +G "$LOG" ;;
 remove)
   for d in "$STATE"/deploy/*/; do

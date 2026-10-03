@@ -41,7 +41,7 @@ const snap = {
   deployments: [{ id: 'd', name: 'Qwen3.8-27B', keys: ['a0'], state: 'ready', agent: 'pi', session: { all: { tokens: 10 } } }],
 }
 const home = model.build(snap, { view: 'home' })
-assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'slot', 'slot', 'slot', 'field', 'acts'], 'local-ai home: running cards, then available GPUs and groups, then all GPUs')
+assertDeepEqual(home.rows.map(r => r.type), ['run', 'sec', 'slot', 'slot', 'slot', 'field', 'field', 'acts'], 'local-ai home: running cards, then available GPUs and groups, then all GPUs')
 assertDeepEqual(home.rows.slice(2, 4).map(r => [r.label, r.run.action]), [['Arc Pro B70', 'run|q|a1'], ['Arc Pro B70', 'run|q|a2']], 'local-ai only free GPUs are listed, each running its model in one click')
 assertDeepEqual([home.rows[4].label, home.rows[4].run.action], ['2 × Arc Pro B70', 'run|q2|a1,a2'], 'local-ai two free cards of a kind are also offered as a group, its own row')
 assertDeepEqual([home.rows[5].label, home.rows[5].value, home.rows[5].action], ['all GPUs', '5', 'gpus'], 'local-ai the rest of the GPUs are one link away')
@@ -84,7 +84,7 @@ assertDeepEqual([chose.hero.name, chose.rows.filter(r => r.type === 'opt' && r.o
 // A crashed model is an available GPU's row: run it again in one click, or open it for the reason, the log and dismiss
 const crashed = Object.assign({}, snap, { deployments: [Object.assign({}, snap.deployments[0], { id: 'x', state: 'error', error: 'the engine stopped' })] })
 const rows = model.build(crashed, { view: 'home', open: 'gpu:a0' }).rows
-assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'slot', 'slot', 'error', 'links', 'field', 'acts'], 'local-ai a crashed model is a row after the free ones and groups, its reason under it')
+assertDeepEqual(rows.map(r => r.type), ['sec', 'slot', 'slot', 'slot', 'slot', 'error', 'links', 'field', 'field', 'acts'], 'local-ai a crashed model is a row after the free ones and groups, its reason under it')
 assertDeepEqual(rows[4].dismiss, 'stop|x', 'local-ai a crashed GPU is dismissed from its row in one click')
 assertDeepEqual([rows[4].crashed, rows[4].run.action, rows[5].label, rows[6].items.map(a => a.action)], [true, 'again|x|a0', 'the engine stopped', ['log', 'more|x']], 'local-ai a stopped GPU runs again from its row, shows why, shows its logs or opens its Config')
 JS
