@@ -23,6 +23,9 @@ line 700 >"$D/usage.jsonl"
 check "1 710" "a truncated log is summed again"
 sleep 1.1; line 800 >>"$D/usage.jsonl"
 check "2 1520" "a line a second later"
+week=$(bash -c "source '$FNS'; STATE='$T'; session m '$EPOCHSECONDS'" | jq -r .week)
+[[ $week == 1520 ]] || { echo "not ok - model weekly tokens: $week"; exit 1; }
+echo 'ok - weekly tokens belong to this model'
 rm -f "$D/summary.json"
 line 1 | awk '{for(i=0;i<200005;i++)print}' >"$D/usage.jsonl"
 check "200005 2200055" "large logs cross the 100000-line boundary without SIGPIPE"
