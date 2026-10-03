@@ -394,8 +394,9 @@ owned() {
     die "the model files must be owned by you and cannot be symbolic links"
 }
 
-engine() { printf 'omarchy-local-ai-%s-engine' "$1"; }
-gateway() { printf 'omarchy-local-ai-%s-gateway' "$1"; }
+network() { printf 'omarchy-local-ai-%s-%s' "${PKEXEC_UID:-$(id -u)}" "$1"; }
+engine() { printf '%s-engine' "$(network "$1")"; }
+gateway() { printf '%s-gateway' "$(network "$1")"; }
 ours() { [[ $(docker inspect -f "{{index .Config.Labels \"$LABEL.uid\"}}" "$1" 2>/dev/null) == "${PKEXEC_UID:-$(id -u)}" ]]; }
 
 # rundir <id>: what the start writes for the engine (the config asset, its GPUs' by-path links); root's is in /run
@@ -412,7 +413,7 @@ remove() {
   for c in "$(engine "$1")" "$(gateway "$1")"; do
     if ours "$c"; then docker rm -f "$c" >/dev/null 2>&1 || return 1; fi
   done
-  docker network rm "omarchy-local-ai-$1" >/dev/null 2>&1 || true
+  docker network rm "$(network "$1")" >/dev/null 2>&1 || true
   rm -rf -- "$(rundir "$1")"
 }
 
@@ -446,11 +447,17 @@ phase_start() {
   done
 
   remove "$id"
+  # Recheck after downloads with the privileged launcher's view of every container's allocations.
+  g=$(gpus)
+  for k in "$@"; do
+    jq -e --arg k "$k" 'any(.[]; .key == $k and (.held or (.usedMiB // 0) > 2048))' <<<"$g" >/dev/null &&
+      die "$k is in use by another program"
+  done
   run=$(rundir "$id")
   mkdir -p "$run/by-path"
-  docker network create --label "$LABEL=1" "omarchy-local-ai-$id" >/dev/null
+  docker network create --label "$LABEL=1" --label "$LABEL.uid=${PKEXEC_UID:-$(id -u)}" "$(network "$id")" >/dev/null
   a=(docker run -d --name "$(engine "$id")" --restart unless-stopped --security-opt no-new-privileges
-    --network "omarchy-local-ai-$id" --network-alias engine --label "$LABEL=1" --label "$LABEL.uid=${PKEXEC_UID:-$(id -u)}")
+    --network "$(network "$id")" --network-alias engine --label "$LABEL=1" --label "$LABEL.uid=${PKEXEC_UID:-$(id -u)}")
   if [[ $backend == "nvidia" ]]; then
     v=$(printf '%s,' "${@#*:}")
     a+=(--gpus "\"device=${v%,}\"")
@@ -496,7 +503,7 @@ phase_start() {
 
   if ! docker run -d --name "$(gateway "$id")" --restart unless-stopped --security-opt no-new-privileges \
     --cap-drop ALL --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m --dns 127.0.0.1 \
-    --network "omarchy-local-ai-$id" --user "${RUN_AS:-$(id -u):$(id -g)}" --publish "127.0.0.1:$port:12434" \
+    --network "$(network "$id")" --user "${RUN_AS:-$(id -u):$(id -g)}" --publish "127.0.0.1:$port:12434" \
     --label "$LABEL=1" --label "$LABEL.uid=${PKEXEC_UID:-$(id -u)}" \
     --env "UPSTREAM=http://engine:$(jq -r .launch.port <<<"$r")" --env "MODEL=$(jq -r '.servedName // ""' <<<"$r")" \
     --env GATEWAY_KEY_FILE=/run/gateway.key --volume "$KEY:/run/gateway.key:ro" \
@@ -538,7 +545,7 @@ phase_purge() {
   for c in $containers; do
     docker rm -f "$c" >/dev/null || die "could not remove a model container; try again"
   done
-  docker network ls -q --filter "label=$LABEL=1" | xargs -r timeout --kill-after=5 30 docker network rm >/dev/null 2>&1 || true
+  docker network ls -q --filter "label=$LABEL.uid=${PKEXEC_UID:-$(id -u)}" | xargs -r timeout --kill-after=5 30 docker network rm >/dev/null 2>&1 || true
   jq -r '.gateway.image, .hardware[].recipes[].image' "$RECIPES" | sort -u | xargs -r timeout --kill-after=5 30 docker rmi >/dev/null 2>&1 || true
 }
 
@@ -679,7 +686,7 @@ cmd_run() {
 # Stop waits for the starting worker before taking its containers down.
 cmd_stop() {
   valid_id "${1:-}" || die "stop <recipe>"
-  local d p i
+  local d p i unshared=true
   d=$(dir_of "$1")
   [[ -d $d ]] || return 0
   : >"$d/cancel"
@@ -697,11 +704,15 @@ cmd_stop() {
   fi
   status "$1" stopping "" 0
   if [[ $(jq -r '.shared // false' "$d/config.json" 2>/dev/null) == "true" ]]; then
-    (cmd_share "$1" off) || say "could not unshare $1; stopping the model anyway"
+    (cmd_share "$1" off) || unshared=false
   fi
   if ! elevate stop "$1"; then
     status "$1" error "" 0 "could not stop it; try again"
     return 1
+  fi
+  if [[ $unshared == false ]]; then
+    status "$1" error "" 0 "model stopped, but Tailscale sharing could not be removed; retry Stop"
+    die "sharing could not be removed; the port remains reserved, retry Stop"
   fi
   rm -rf -- "$d"
   say "$1 stopped"
@@ -932,7 +943,7 @@ summary() {
       flock -n 9 || exit 0
       while ((seen < n)) || [[ ! -f $s ]]; do
         take=$((n - seen < 100000 ? n - seen : 100000))
-        if tail -n +"$((seen + 1))" "$f" | head -n "$take" | { grep '^{' || true; } |
+        if sed -n "$((seen + 1)),$((seen + take))p;$((seen + take))q" "$f" | { grep '^{' || true; } |
           jq -sc --argjson n "$((seen + take))" --slurpfile old <(cat "$s" 2>/dev/null || echo '{}') '
             def rate: .completion / ((if .ms > .ttft_ms then .ms - .ttft_ms else .ms end) / 1000);
             def bump(groups; key; val): reduce groups[] as $g (.; .[$g[0] | key | tostring] += ($g | val));
